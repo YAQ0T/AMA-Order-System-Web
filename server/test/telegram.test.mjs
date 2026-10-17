@@ -282,11 +282,27 @@ console.log('\nUnlinking');
   ok(Boolean(unlinked), 'if the taker blocks the bot, they are unlinked automatically (and prompted to link again)');
 }
 {
-  const r = await call('POST', '/api/telegram/link', { token: taker2 });
-  await tg.say(777, `/start ${new URL(r.data.url).searchParams.get('start')}`);
+  // A user with no orders can be deleted even with Telegram linked (the link
+  // row must not block it). One who has worked on orders is deactivated
+  // instead - deleting would erase their history.
+  await call('POST', '/api/auth/register', { body: { username: 'taker_new', password: 'pass1234', role: 'taker' } });
+  const pending = (await call('GET', '/api/admin/users/pending', { token: admin })).data || [];
+  const fresh = pending.find((u) => u.username === 'taker_new');
+  await call('PUT', `/api/admin/users/${fresh.id}/approve`, { token: admin, body: {} });
+  const freshToken = await login('taker_new');
+  const r = await call('POST', '/api/telegram/link', { token: freshToken });
+  await tg.say(778, `/start ${new URL(r.data.url).searchParams.get('start')}`);
+  await waitFor(async () => (await status(freshToken)).linked);
+  const del = await call('DELETE', `/api/admin/users/${fresh.id}`, { token: admin });
+  ok(del.status === 200, 'admin can delete a user (with no orders) who has Telegram linked', `got ${del.status} ${JSON.stringify(del.data)}`);
+
+  const r2 = await call('POST', '/api/telegram/link', { token: taker2 });
+  await tg.say(777, `/start ${new URL(r2.data.url).searchParams.get('start')}`);
   await waitFor(async () => (await status(taker2)).linked);
-  const del = await call('DELETE', `/api/admin/users/${tid('taker2')}`, { token: admin });
-  ok(del.status === 200, 'admin can delete a user who has Telegram linked', `got ${del.status} ${JSON.stringify(del.data)}`);
+  const refused = await call('DELETE', `/api/admin/users/${tid('taker2')}`, { token: admin });
+  ok(refused.status === 409, 'a linked taker who has worked on orders cannot be deleted (409)', `got ${refused.status}`);
+  const off = await call('PUT', `/api/admin/users/${tid('taker2')}/deactivate`, { token: admin, body: {} });
+  ok(off.status === 200, 'but can be deactivated', `got ${off.status}`);
 }
 
 console.log(`\n  ${passed} passed, ${failed} failed\n`);

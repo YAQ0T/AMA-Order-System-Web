@@ -3,13 +3,14 @@
 ## Automated
 
 ```bash
-cd client && npm test      # 51 unit tests
+cd client && npm test      # 57 unit tests
 cd client && npm run lint
 ```
 
 Covers the pure logic that is easy to break and hard to notice: Arabic-Indic
-digit parsing, the DECIMAL-as-string price coercion, report aggregation, and the
-print document (RTL, LTR isolation, HTML escaping, status labels).
+digit parsing, the DECIMAL-as-string price coercion, report aggregation, the
+print document (RTL, LTR isolation, HTML escaping, status labels), and the
+Arabic translation of server errors, order history and notifications.
 
 ## Testing the UI without a database
 
@@ -77,9 +78,12 @@ Against the mock, driving the real UI:
 
 ## Verified against the real server and MySQL 26.7
 
-Run with `npm run test:integration` in `server/` — 143 checks across three suites. It creates a
-throwaway database, runs everything against the real routes and real MySQL, and
-drops it afterwards — your own database is never touched.
+Run with `npm run test:integration` in `server/` — **329 checks across six suites**
+(api 66, concurrency 34, telegram 45, open-orders 77, backup 47, security 60).
+It creates a throwaway database, runs everything against the real routes and
+real MySQL, and drops it afterwards — your own database is never touched. Test
+servers also write their backups and order logs to a throwaway folder, and
+never take automatic backups.
 
 | Area | Verified |
 |---|---|
@@ -111,12 +115,46 @@ drops it afterwards — your own database is never touched.
 | Telegram UI | Real browser: link → open Telegram → Start → card turns green on its own, with toasts for link and unlink |
 | Telegram accountant | Welcome says ERP orders will arrive; starting an order sends nothing; completing it sends exactly one "ready for ERP" with the unavailable item struck through and counted, no prices, button to `/accounter`; entering ERP sends nothing; unlinked accountant gets nothing (disabling the send fails 4 checks) |
 | Telegram roles | Makers and admins are told they cannot link, and get 403 if they try |
+| **Open orders** | Create / send out / open up / assign / release; refused without a taker *and* without "open"; takers see them without prices and cannot tick or start them before taking |
+| **Open-order race** | **4 takers tapping twice each at the same moment, 20 rounds: exactly one winner every time.** With the row lock removed the same test has all four winning |
+| Maker vs taker on an open order | Maker assigns while a taker takes it, 10 rounds: always ends with the maker's choice only |
+| Open orders on Telegram | Every linked taker gets one "open order" message (no prices, button to the open tab); once taken it is edited to "taken by …" / "you took it" / "no longer available"; no duplicate messages |
+| Edit messages | A save that changes nothing, or only prices, sends nothing; a new taker gets "new order", the others nothing; admin edits notify like maker edits |
+| **Backups** | Admin-only; complete file with every table; Arabic, exact prices and quantities; no plain passwords; path tricks cannot download other files |
+| **Restore** | Refuses while the system runs, a cut-off file, and a non-AMA file (nothing changed after each refusal); takes a safety backup; brings back a deleted order with items, ticks, takers, history; logins work; new orders keep unique numbers; a value with \ ; and ' survives. Naive quoting in the dump fails 9 of these checks |
+| Backup while working | A backup taken while 8 orders are being created succeeds and blocks nobody |
+| Retention | Newest 5, one per day for 30 days, one per month for a year, safety copies 30 days |
+| **Sign-up** | Role "admin" refused (and no admin created); short names/passwords refused; duplicate name in other letter case refused |
+| **Sessions** | Broken / forged-with-old-default-secret tokens get 401; a deleted or deactivated user's open session ends at once; a password change logs out other devices |
+| **Deactivate vs delete** | Deleting a maker with orders or a taker with history is refused and changes nothing; deactivating keeps history, blocks login, hides them from makers; activating restores access |
+| **Passwords** | Default admin password flagged; wrong current password is a 400, not a logout; admin reset ends the user's sessions; makers cannot reset |
+| Input limits | Over-long names, descriptions, out-of-range quantities and prices, unknown cities: 400 with a clear message, on create and edit |
+| Search | "%" and "_" are matched literally |
+| Login throttling | 8 wrong passwords lock that name for 15 minutes; others can still log in |
+| **Launcher (Windows)** | Start with nothing running (installs/builds as needed, waits for the database, prints the phone address without the VirtualBox adapter); start when already running; start with MySQL unreachable (clear message, nothing left running); stop; restore cancelled (nothing changed) |
 
 ---
 
 ## What still needs testing — and how
 
 These cannot be checked without your real environment. Roughly in order of risk.
+
+### 0. The new things, on your machines
+
+1. **Open orders on real phones.** Create an order with «مفتوح لأي مجهّز».
+   Two takers' phones should get "🔓 طلب مفتوح". One taps «خذ الطلب» in the app:
+   the other phone's message should change to "تم أخذ الطلب".
+2. **Backups somewhere else.** Set `BACKUP_COPY_DIR` in `server/.env` to a
+   USB drive or a OneDrive/Google Drive folder, restart, then Admin ›
+   النسخ الاحتياطي › «خذ نسخة احتياطية الآن» and check the file appears there too.
+3. **A real restore, once, before you need it.** On a quiet day: Stop AMA,
+   Restore AMA, pick yesterday's backup, check the data, then (if you want
+   today's data back) restore the "before-restore" copy the same way.
+4. **The Mac files.** Not testable here (no Mac). Double-click
+   `Start AMA (Mac).command` on the Mac. If macOS blocks it: right-click ›
+   Open. If it says "permission denied": `chmod +x *.command` once in Terminal.
+5. **Change the admin password** if it is still `admin123` - the red banner
+   shows until you do.
 
 ### 1. Telegram with a real bot and real phones
 

@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { T, statusLabel } from '../lib/labels';
 import { formatDateTime, formatPrice, formatQuantity, lineTotal, orderTitle, orderTotal, formatMoney } from '../lib/format';
 import { StatusChip, ItemStatusChip, InfoChip, Ltr, EmptyState } from './ui';
+import { isOpenOrder } from '../api/orders';
+import { historyText } from '../lib/historyText';
 
 const ALL_STATUSES = ['pending', 'in-progress', 'completed', 'archived', 'entered_erp'];
 
@@ -60,7 +62,8 @@ function ItemsTable({ order, showPrices, onItemStatus, busyItems, onItemEdit, on
               </td>
               {(onItemStatus || onItemEdit) && (
                 <td className="py-2">
-                  <div className="flex flex-wrap gap-1">
+                  {/* Takers tap these on a phone, so they are finger-sized below the sm breakpoint. */}
+                  <div className="flex flex-wrap gap-1.5 sm:gap-1">
                     {onItemStatus && (
                       <>
                         <button
@@ -70,7 +73,7 @@ function ItemsTable({ order, showPrices, onItemStatus, busyItems, onItemEdit, on
                             onItemStatus(order, item.name, item.status === 'collected' ? null : 'collected')
                           }
                           className={[
-                            'rounded px-2 py-1 text-xs font-bold transition disabled:opacity-40',
+                            'rounded px-3 py-2 text-sm font-bold transition disabled:opacity-40 sm:px-2 sm:py-1 sm:text-xs',
                             item.status === 'collected'
                               ? 'bg-emerald-600 text-white'
                               : 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300',
@@ -85,7 +88,7 @@ function ItemsTable({ order, showPrices, onItemStatus, busyItems, onItemEdit, on
                             onItemStatus(order, item.name, item.status === 'unavailable' ? null : 'unavailable')
                           }
                           className={[
-                            'rounded px-2 py-1 text-xs font-bold transition disabled:opacity-40',
+                            'rounded px-3 py-2 text-sm font-bold transition disabled:opacity-40 sm:px-2 sm:py-1 sm:text-xs',
                             item.status === 'unavailable'
                               ? 'bg-red-600 text-white'
                               : 'bg-red-100 text-red-800 hover:bg-red-200 dark:bg-red-500/20 dark:text-red-300',
@@ -99,7 +102,7 @@ function ItemsTable({ order, showPrices, onItemStatus, busyItems, onItemEdit, on
                       <button
                         type="button"
                         onClick={() => onItemEdit(order, item)}
-                        className="rounded px-2 py-1 text-xs font-bold text-slate-600 hover:bg-slate-100 dark:text-ink-400 dark:hover:bg-slate-700"
+                        className="rounded px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100 sm:px-2 sm:py-1 sm:text-xs dark:text-ink-400 dark:hover:bg-slate-700"
                       >
                         {T.edit}
                       </button>
@@ -151,7 +154,7 @@ function HistoryList({ history }) {
             <span className="font-bold">{entry.Editor?.username || '—'}</span>
             <Ltr>{formatDateTime(entry.createdAt)}</Ltr>
           </div>
-          <p className="text-slate-700 dark:text-ink-50">{entry.newDescription}</p>
+          <p className="text-slate-700 dark:text-ink-50">{historyText(entry.newDescription)}</p>
         </li>
       ))}
     </ul>
@@ -216,6 +219,11 @@ function OrderCard({
               <InfoChip>
                 {T.takers}: {order.AssignedTakers.map((t) => t.username).join('، ')}
               </InfoChip>
+            )}
+            {isOpenOrder(order) && (
+              <span className="chip bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-200">
+                {T.openToAll}
+              </span>
             )}
             {order.Accounter && (
               <InfoChip>

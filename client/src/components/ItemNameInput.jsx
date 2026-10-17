@@ -24,6 +24,10 @@ export default function ItemNameInput({
   const [remote, setRemote] = useState([]);
   const [highlighted, setHighlighted] = useState(-1);
   const [dismissed, setDismissed] = useState(false);
+  // Suggestions belong to the field being typed in. Without this, every row
+  // of the edit window - which opens already filled in - fetched suggestions
+  // on its own and popped its list open over the rows below it.
+  const [focused, setFocused] = useState(false);
   const [loading, setLoading] = useState(false);
   const wrapperRef = useRef(null);
   const listId = useId();
@@ -38,11 +42,14 @@ export default function ItemNameInput({
         .slice(0, 6)
     : [];
 
-  const suggestions = query.length >= 2 ? [...new Set([...local, ...remote])].slice(0, 6) : [];
-  const open = !dismissed && suggestions.length > 0;
+  // Never suggest exactly what is already typed.
+  const suggestions = query.length >= 2
+    ? [...new Set([...local, ...remote])].filter((name) => name.toLowerCase() !== query.toLowerCase()).slice(0, 6)
+    : [];
+  const open = focused && !dismissed && suggestions.length > 0;
 
   useEffect(() => {
-    if (query.length < 2) return undefined;
+    if (!focused || query.length < 2) return undefined;
 
     const controller = new AbortController();
     const timer = setTimeout(async () => {
@@ -61,7 +68,7 @@ export default function ItemNameInput({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [query]);
+  }, [query, focused]);
 
   useEffect(() => {
     const onDocClick = (e) => {
@@ -121,7 +128,11 @@ export default function ItemNameInput({
           onChange(e.target.value);
         }}
         onKeyDown={onKeyDown}
-        onFocus={() => setDismissed(false)}
+        onFocus={() => {
+          setFocused(true);
+          setDismissed(false);
+        }}
+        onBlur={() => setFocused(false)}
         role="combobox"
         aria-expanded={open}
         aria-controls={listId}

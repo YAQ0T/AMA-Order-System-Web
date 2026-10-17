@@ -4,8 +4,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../store/auth';
 import { T, ROLES } from '../lib/labels';
 
-// Admin is deliberately not offered here: the server auto-approves admins
-// (User.beforeCreate), so exposing it would let anyone self-promote.
+// Admin is not offered: the server refuses it too (routes/auth.js). The only
+// admin is the one created on first start.
 const SELECTABLE_ROLES = ['maker', 'taker', 'accounter'];
 
 export default function Signup() {
@@ -68,7 +68,7 @@ export default function Signup() {
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="new-password"
               required
-              minLength={4}
+              minLength={6}
             />
           </div>
 

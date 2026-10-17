@@ -47,7 +47,7 @@ router.get('/', authenticateToken, async (req, res) => {
     try {
         const notifications = await Notification.findAll({
             where: { userId: req.user.id },
-            order: [['createdAt', 'DESC']],
+            order: [['createdAt', 'DESC'], ['id', 'DESC']],
             limit: 50
         });
         res.json(notifications);

@@ -87,6 +87,22 @@ export const T = {
     'تم إنشاء حسابك بنجاح. يحتاج المدير إلى الموافقة عليه قبل أن تتمكن من الدخول.',
   accountCreated: 'تم إنشاء الحساب. بانتظار موافقة المدير.',
 
+  // Passwords
+  changePassword: 'تغيير كلمة المرور',
+  currentPassword: 'كلمة المرور الحالية',
+  newPassword: 'كلمة المرور الجديدة',
+  confirmPassword: 'تأكيد كلمة المرور الجديدة',
+  passwordsDontMatch: 'كلمتا المرور غير متطابقتين',
+  passwordTooShort: 'كلمة المرور يجب ألا تقل عن 6 أحرف',
+  passwordChanged: 'تم تغيير كلمة المرور. تم إنهاء جلساتك على الأجهزة الأخرى.',
+  defaultPasswordWarning:
+    'ما زلت تستخدم كلمة مرور المدير الافتراضية (admin123) المعروفة للجميع. غيّرها الآن.',
+  changeNow: 'غيّرها الآن',
+  resetPassword: 'كلمة مرور جديدة',
+  resetPasswordFor: (name) => `تعيين كلمة مرور جديدة لـ ${name}`,
+  resetPasswordHint: 'أعطِ المستخدم كلمة المرور الجديدة. سيُطلب منه تسجيل الدخول بها على كل أجهزته.',
+  passwordReset: 'تم تعيين كلمة المرور الجديدة',
+
   // Shell
   darkMode: 'الوضع الليلي',
   refresh: 'تحديث',
@@ -164,6 +180,10 @@ export const T = {
   edit: 'تعديل',
   delete: 'حذف',
   save: 'حفظ',
+  saved: 'تم الحفظ',
+  deleted: 'تم الحذف',
+  itemAdded: 'تمت إضافة الصنف',
+  fixErrors: 'يرجى تصحيح الحقول المميزة باللون الأحمر',
   cancel: 'إلغاء',
   close: 'إغلاق',
   send: 'إرسال',
@@ -208,12 +228,53 @@ export const T = {
   recentActivity: 'آخر النشاطات',
   approve: 'موافقة',
   approved: 'تمت الموافقة',
+  userActive: 'مفعّل',
+  userPending: 'بانتظار الموافقة',
+  userDeactivated: 'معطّل',
+  deactivate: 'تعطيل',
+  activate: 'تفعيل',
+  confirmDeactivate: (name) =>
+    `تعطيل حساب ${name}؟ لن يستطيع الدخول، وتبقى كل طلباته وسجلّه كما هي. يمكنك إعادة تفعيله لاحقاً.`,
+  userDeactivatedToast: 'تم تعطيل الحساب',
+  userDeactivatedWithOrders: (n) => `تم تعطيل الحساب. لديه ${n} طلبات نشطة — أعد إسنادها لمجهّز آخر.`,
+  userActivatedToast: 'تم تفعيل الحساب',
   deleteUser: 'حذف المستخدم',
   noPending: 'لا توجد طلبات موافقة معلّقة',
   usersByRole: 'المستخدمون حسب الدور',
   activityLogs: 'سجل النشاطات',
   loadMore: 'تحميل المزيد',
   details: 'التفاصيل',
+
+  // Backups
+  backups: 'النسخ الاحتياطي',
+  backupIntro:
+    'يأخذ النظام نسخة احتياطية تلقائياً أثناء العمل (كل بضع ساعات عند وجود تغييرات)، ويحتفظ بنسخة لكل يوم لآخر 30 يوماً ونسخة لكل شهر لمدة سنة.',
+  backupNow: 'خذ نسخة احتياطية الآن',
+  backingUp: 'جارٍ أخذ النسخة...',
+  backupDone: 'تم حفظ النسخة الاحتياطية',
+  backupAuto: 'النسخ التلقائي',
+  backupAutoOn: 'مفعّل',
+  backupAutoOff: 'متوقف (BACKUP_AUTO=off)',
+  backupLast: 'آخر نسخة',
+  backupNone: 'لا توجد نسخ بعد',
+  backupLastError: 'فشلت آخر محاولة',
+  backupFolder: 'مجلد النسخ',
+  backupCopyFolder: 'نسخة إضافية في',
+  backupCopyMissing:
+    'لا توجد نسخة إضافية خارج هذا الجهاز. إذا تعطّل القرص ضاعت النسخ معه. حدّد BACKUP_COPY_DIR في server/.env على قرص آخر أو مجلد OneDrive / Google Drive.',
+  backupCopyFailed: 'فشل النسخ إلى المجلد الإضافي',
+  backupList: 'النسخ المحفوظة',
+  backupDate: 'التاريخ',
+  backupKind: 'النوع',
+  backupSize: 'الحجم',
+  backupDownload: 'تنزيل',
+  backupKindAuto: 'تلقائية',
+  backupKindManual: 'يدوية',
+  backupKindSafety: 'قبل الاسترجاع',
+  backupRestoreTitle: 'استرجاع نسخة',
+  backupRestoreBody:
+    'أوقف النظام أولاً (Stop AMA)، ثم شغّل «Restore AMA» واختر النسخة. قبل أي تغيير يأخذ الاسترجاع نسخة أمان من البيانات الحالية، فيمكن التراجع عنه.',
+  backupPrivate: 'تحتوي النسخ على كل البيانات بما فيها كلمات المرور (مشفّرة). احفظها في مكان آمن ولا ترسلها لأحد.',
 
   // Reports
   from: 'من',
@@ -231,7 +292,8 @@ export const T = {
 
   // Confirmations / errors
   confirmDeleteOrder: 'هل تريد حذف هذا الطلب؟ لا يمكن التراجع عن هذا الإجراء.',
-  confirmDeleteUser: 'هل تريد حذف هذا المستخدم؟ لا يمكن التراجع عن هذا الإجراء.',
+  confirmDeleteUser:
+    'هل تريد حذف هذا المستخدم نهائياً؟ الحذف متاح فقط لمن لم يعمل على أي طلب؛ لغيره استخدم «تعطيل».',
   confirmSendToErp: 'هل تريد إرسال هذا الطلب إلى ERP؟ سيتم تعليمه كمُدخَل.',
   somethingWentWrong: 'حدث خطأ ما',
   sessionExpired: 'انتهت الجلسة، يرجى تسجيل الدخول مرة أخرى',
@@ -241,8 +303,21 @@ export const T = {
   invalidPrice: 'السعر غير صالح',
   duplicateItem: 'هذا الصنف مكرر',
   atLeastOneItem: 'يجب إضافة صنف واحد على الأقل',
-  needTaker: 'اختر مجهّزاً واحداً على الأقل للطلبات النشطة',
+  needTaker: 'اختر مجهّزاً واحداً على الأقل، أو اجعل الطلب مفتوحاً لأي مجهّز',
   needAccounter: 'اختر محاسباً للطلبات النشطة',
+
+  // Open orders - left for any taker; the first to take it gets it
+  openToAll: 'مفتوح لأي مجهّز',
+  openToAllHint: 'لن يُسند لأحد الآن: يظهر عند كل المجهّزين، وأول من يأخذه يصبح له.',
+  openToAllReleaseHint: 'سيُسحب من المجهّز الحالي ويعود «قيد الانتظار» ليأخذه أي مجهّز.',
+  myOrders: 'طلباتي',
+  openOrders: 'طلبات مفتوحة',
+  openOrdersHint: 'طلبات لم تُسند لأحد. أول مجهّز يأخذ الطلب يصبح له ويختفي من عند الباقين.',
+  takeOrder: 'خذ الطلب',
+  takeOrderConfirm: (id) => `أخذ الطلب #${id}؟ سيُسند إليك ويختفي من عند باقي المجهّزين.`,
+  orderTaken: 'الطلب لك الآن — تجده في «طلباتي»',
+  orderAlreadyTaken: 'سبقك مجهّز آخر وأخذ هذا الطلب',
+  noOpenOrders: 'لا توجد طلبات مفتوحة حالياً',
 
   // Keyboard hints
   shortcutCreate: 'Ctrl+Enter',

@@ -3,12 +3,13 @@
  *
  * The server under test is started with TELEGRAM_API_BASE pointing here, so it
  * talks to this instead of api.telegram.org. Implements just what the server
- * uses - getMe, deleteWebhook, getUpdates (long polling) and sendMessage -
- * plus control endpoints the test uses to act as a Telegram user and to see
- * what the bot sent:
+ * uses - getMe, deleteWebhook, getUpdates (long polling), sendMessage and
+ * editMessageText - plus control endpoints the test uses to act as a Telegram
+ * user and to see what the bot sent:
  *
  *   POST /_test/update        { chatId, text, username?, chatType? }  user sends a message
- *   GET  /_test/sent          every message the bot has sent
+ *   GET  /_test/sent          every message the bot has sent (as first sent)
+ *   GET  /_test/edits         every edit the bot made to a message it sent
  *   POST /_test/block         { chatId }   sends to this chat fail with 403
  *   POST /_test/reject-buttons { on }      reject URL buttons with 400
  */
@@ -19,6 +20,7 @@ const BOT = { id: 900001, is_bot: true, first_name: 'AMA Test', username: 'ama_t
 function startFakeTelegram() {
     const updates = [];
     const sent = [];
+    const edits = [];
     const blocked = new Set();
     const waiters = [];
     let nextUpdateId = 1;
@@ -71,6 +73,7 @@ function startFakeTelegram() {
                 return ok(res, true);
             }
             if (url.pathname === '/_test/sent') return ok(res, sent);
+            if (url.pathname === '/_test/edits') return ok(res, edits);
             if (url.pathname === '/_test/block') { blocked.add(String(body.chatId)); return ok(res, true); }
             if (url.pathname === '/_test/reject-buttons') { rejectButtons = Boolean(body.on); return ok(res, true); }
 
@@ -105,14 +108,30 @@ function startFakeTelegram() {
                     const chatId = String(body.chat_id);
                     if (blocked.has(chatId)) return fail(res, 403, 'Forbidden: bot was blocked by the user');
                     if (rejectButtons && body.reply_markup) return fail(res, 400, 'Bad Request: BUTTON_URL_INVALID');
+                    const messageId = nextMessageId++;
                     sent.push({
                         chatId,
+                        messageId,
                         text: body.text,
                         parseMode: body.parse_mode,
                         button: body.reply_markup?.inline_keyboard?.[0]?.[0] || null,
                         at: Date.now(),
                     });
-                    return ok(res, { message_id: nextMessageId++, chat: { id: Number(chatId) }, text: body.text });
+                    return ok(res, { message_id: messageId, chat: { id: Number(chatId) }, text: body.text });
+                }
+                case 'editMessageText': {
+                    const chatId = String(body.chat_id);
+                    const original = sent.find((m) => m.chatId === chatId && m.messageId === Number(body.message_id));
+                    if (!original) return fail(res, 400, 'Bad Request: message to edit not found');
+                    edits.push({
+                        chatId,
+                        messageId: original.messageId,
+                        text: body.text,
+                        parseMode: body.parse_mode,
+                        button: body.reply_markup?.inline_keyboard?.[0]?.[0] || null,
+                        at: Date.now(),
+                    });
+                    return ok(res, { message_id: original.messageId, chat: { id: Number(chatId) }, text: body.text });
                 }
                 default:
                     return fail(res, 404, `Method ${method} not implemented in fake`);

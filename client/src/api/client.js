@@ -10,6 +10,8 @@
  * defaults to 6001 now.
  */
 
+import { translateServerError } from '../lib/serverErrors';
+
 const configured = (import.meta.env.VITE_API_URL || '').trim();
 
 function resolveBaseUrl() {
@@ -98,13 +100,41 @@ async function request(method, path, { query, body, signal } = {}) {
       (data && typeof data === 'object' && (data.error || data.message)) ||
       (typeof data === 'string' && data) ||
       `خطأ ${response.status}`;
-    throw new ApiError(message, response.status, data);
+    // Shown to people, so in Arabic; body.error keeps the server's original.
+    throw new ApiError(translateServerError(message), response.status, data);
   }
 
   return data;
 }
 
+/**
+ * Fetch a file (a backup, for instance) with the auth header a plain link
+ * cannot send. Resolves to a Blob.
+ */
+async function download(path) {
+  const headers = {};
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  let response;
+  try {
+    response = await fetch(buildUrl(path), { headers });
+  } catch (cause) {
+    throw new ApiError('تعذّر الاتصال بالخادم', 0, { cause: String(cause) });
+  }
+  if (!response.ok) {
+    let message = `خطأ ${response.status}`;
+    try {
+      const data = await response.json();
+      message = data.error || data.message || message;
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(translateServerError(message), response.status, null);
+  }
+  return response.blob();
+}
+
 export const api = {
+  download,
   get: (path, query, opts) => request('GET', path, { query, ...opts }),
   post: (path, body, opts) => request('POST', path, { body, ...opts }),
   put: (path, body, opts) => request('PUT', path, { body, ...opts }),

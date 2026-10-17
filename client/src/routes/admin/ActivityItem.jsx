@@ -21,10 +21,21 @@ const ACTION_LABELS = {
   order_deleted: 'حذف طلب',
   order_status_changed: 'تغيير حالة الطلب',
   order_item_status_changed: 'تغيير حالة صنف',
+  order_claimed: 'أخذ طلب مفتوح',
+  order_error: 'خطأ في طلب',
+  telegram_unlinked: 'فك ربط تيليغرام',
+  backup_created: 'نسخة احتياطية يدوية',
+  user_deactivated: 'تعطيل حساب',
+  user_password_changed: 'تغيير كلمة المرور',
+  user_password_reset: 'تعيين كلمة مرور لمستخدم',
+  backup_downloaded: 'تنزيل نسخة احتياطية',
 };
 
 export const actionLabel = (action) =>
   ACTION_LABELS[action] || String(action || '').replace(/_/g, ' ').trim();
+
+const TARGET_LABELS = { user: 'مستخدم', order: 'طلب', system: 'النظام' };
+const targetLabel = (type) => TARGET_LABELS[type] || type;
 
 export default function ActivityItem({ log }) {
   const [open, setOpen] = useState(false);
@@ -41,7 +52,7 @@ export default function ActivityItem({ log }) {
         )}
         {log.targetType && (
           <span className="text-xs text-slate-400">
-            {log.targetType}
+            {targetLabel(log.targetType)}
             {log.targetId != null && (
               <>
                 {' '}

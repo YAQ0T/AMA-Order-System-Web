@@ -6,6 +6,7 @@ import AdminOverview from './AdminOverview';
 import AdminUsers from './AdminUsers';
 import AdminOrders from './AdminOrders';
 import AdminLogs from './AdminLogs';
+import AdminBackups from './AdminBackups';
 import ReportsView from '../reports/ReportsView';
 
 export default function AdminDashboard() {
@@ -18,6 +19,7 @@ export default function AdminDashboard() {
           { to: '/admin/orders', label: T.orders },
           { to: '/admin/logs', label: T.logs },
           { to: '/admin/reports', label: T.reports },
+          { to: '/admin/backups', label: T.backups },
         ]}
       />
 
@@ -28,6 +30,7 @@ export default function AdminDashboard() {
         <Route path="orders" element={<AdminOrders />} />
         <Route path="logs" element={<AdminLogs />} />
         <Route path="reports" element={<ReportsView title={T.reports} />} />
+        <Route path="backups" element={<AdminBackups />} />
         <Route path="*" element={<Navigate to="overview" replace />} />
       </Routes>
     </>

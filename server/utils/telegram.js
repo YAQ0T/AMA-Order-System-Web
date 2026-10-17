@@ -131,6 +131,30 @@ function orderUpdatedMessage(order, editor) {
     return [`✏️ <b>تعديل على الطلب ${ltr(`#${order.id}`)}</b>`, '', ...orderDetails(order, editor)].join('\n');
 }
 
+/** An order left open to any taker: the first to take it in the app gets it. */
+function openOrderMessage(order, maker) {
+    return [
+        `🔓 <b>طلب مفتوح ${ltr(`#${order.id}`)}</b>`,
+        'أول مجهّز يأخذه من النظام يصبح له.',
+        '',
+        ...orderDetails(order, maker),
+    ].join('\n');
+}
+
+/**
+ * What an open-order message is edited into once the order is no longer open,
+ * so takers do not go looking for an order someone else already has.
+ * `takenBy` is null when it closed for another reason (the maker assigned it
+ * to someone, archived it or deleted it).
+ */
+function openOrderClosedMessage(orderId, details, { takenBy, isRecipient }) {
+    let header;
+    if (takenBy && isRecipient) header = `✅ <b>أخذتَ الطلب ${ltr(`#${orderId}`)}</b> — تجده في «طلباتي».`;
+    else if (takenBy) header = `🔒 <b>تم أخذ الطلب ${ltr(`#${orderId}`)}</b> — أخذه ${esc(takenBy)}`;
+    else header = `🚫 <b>الطلب ${ltr(`#${orderId}`)} لم يعد متاحاً</b>`;
+    return [header, '', ...details].join('\n');
+}
+
 /**
  * For the accountant: an order is completed and waiting to be entered into
  * ERP. What they need at a glance is which order, and which items did NOT go
@@ -209,7 +233,8 @@ async function sendMessage(chatId, html, { button } = {}) {
 }
 
 /**
- * Send without throwing. Returns true when Telegram accepted the message.
+ * Send without throwing. Resolves to the sent message (truthy) when Telegram
+ * accepted it, or false.
  * A chat that blocked the bot or no longer exists is unlinked, so the app shows
  * that taker the "link Telegram" prompt again instead of pretending they are
  * still reachable.
@@ -217,8 +242,7 @@ async function sendMessage(chatId, html, { button } = {}) {
 async function safeSend(chatId, html, options = {}) {
     for (let attempt = 0; attempt < 2; attempt++) {
         try {
-            await sendMessage(chatId, html, options);
-            return true;
+            return (await sendMessage(chatId, html, options)) || true;
         } catch (err) {
             if (err.code === 429 && err.retryAfter && attempt === 0) {
                 await sleep(Math.min(err.retryAfter, 30) * 1000);
@@ -277,6 +301,72 @@ async function deliverTo(users, buildText, { path = '/taker' } = {}) {
         })
     );
     return [...unlinked, ...failed];
+}
+
+// ---------------------------------------------------------------------------
+// Open orders
+
+// The messages sent for each open order, so they can be edited to say "taken"
+// once someone takes it. Kept in memory only: after a server restart, older
+// open-order messages simply stay as they were - the app is the source of
+// truth and refuses a second taker either way.
+const openBroadcasts = new Map(); // orderId -> { details, messages: [{ userId, chatId, messageId }] }
+
+/**
+ * Tell every approved, linked taker that an order is open. Resolves to the
+ * number of takers it reached.
+ */
+async function broadcastOpenOrder(order, maker) {
+    if (!enabled()) return 0;
+    const { User } = models();
+    const takers = await User.findAll({
+        where: { role: 'taker', isApproved: true },
+        attributes: ['id', 'username'],
+    });
+    const { linked } = await partitionByTelegram(takers);
+    if (linked.length === 0) return 0;
+
+    const text = openOrderMessage(order, maker);
+    const button = openButton('/taker/open');
+    const messages = [];
+    await Promise.all(
+        linked.map(async ({ user, chatId }) => {
+            const sent = await safeSend(chatId, text, { button });
+            if (sent && sent.message_id) messages.push({ userId: user.id, chatId, messageId: sent.message_id });
+        })
+    );
+    if (messages.length) {
+        openBroadcasts.set(Number(order.id), { details: orderDetails(order, maker), messages });
+    }
+    return messages.length;
+}
+
+/**
+ * The order is no longer open: edit the messages broadcastOpenOrder sent.
+ * `takenBy` is the taker who took it ({ id, username }), or null.
+ */
+async function closeOpenOrder(orderId, takenBy = null) {
+    const entry = openBroadcasts.get(Number(orderId));
+    if (!entry) return;
+    openBroadcasts.delete(Number(orderId));
+    await Promise.all(
+        entry.messages.map(({ userId, chatId, messageId }) =>
+            // No reply_markup: the edit drops the "open the system" button.
+            api('editMessageText', {
+                chat_id: chatId,
+                message_id: messageId,
+                text: openOrderClosedMessage(orderId, entry.details, {
+                    takenBy: takenBy?.username || null,
+                    isRecipient: Boolean(takenBy) && takenBy.id === userId,
+                }),
+                parse_mode: 'HTML',
+                disable_web_page_preview: true,
+            }).catch((err) => {
+                // Deleted by the user, or too old to edit. Nothing to do.
+                console.warn(`[telegram] could not update open-order message in ${chatId}: ${err.message}`);
+            })
+        )
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -429,6 +519,8 @@ module.exports = {
     deliverTo,
     partitionByTelegram,
     notifyUnlinked,
+    broadcastOpenOrder,
+    closeOpenOrder,
     orderAssignedMessage,
     orderUpdatedMessage,
     orderReadyForErpMessage,

@@ -5,16 +5,47 @@ it talks to. Ported from the Flutter app in `../AMA-Order-System-Flutter`.
 
 ```
 AMA-Order-System-Web/
+├── Start AMA (Windows).cmd     double-click to start  (Mac: Start AMA (Mac).command)
+├── Stop AMA (Windows).cmd      double-click to stop   (Mac: Stop AMA (Mac).command)
+├── Restore AMA (Windows).cmd   restore a backup       (Mac: Restore AMA (Mac).command)
 ├── client/          React 19 + Vite 7 web app
 ├── server/          Node/Express + MySQL API
+├── backups/         database backups (created automatically, not in git)
 ├── tools/
 │   └── mock-api.js  Fake API for front-end work without a database
-└── scripts/         Start helpers for Windows and macOS/Linux
+└── scripts/         launch.js (behind the double-click files) and dev helpers
 ```
 
 ---
 
-## Quick start
+## التشغيل اليومي (بكبسة وحدة)
+
+| الملف | شو بيعمل |
+|---|---|
+| **Start AMA (Windows).cmd** / **Start AMA (Mac).command** | بيشغّل النظام وبيفتحه بالمتصفح، وبيكتب العنوان اللي بتفتحوه من التلفونات |
+| **Stop AMA (Windows).cmd** / **Stop AMA (Mac).command** | بيطفي النظام |
+| **Restore AMA (Windows).cmd** / **Restore AMA (Mac).command** | بيرجّع البيانات من نسخة احتياطية (بياخد نسخة أمان من الوضع الحالي قبل أي تغيير) |
+
+- بعد ما يشتغل بتقدر تسكّر النافذة السوداء — النظام بيضل شغّال.
+- أول مرة: إذا ما في ملف `server/.env` بينعمل لحاله وبينفتح، حط كلمة سر MySQL فيه وشغّل Start AMA مرة ثانية.
+- لازم يكون **Node.js** منزّل (النسخة LTS من nodejs.org) و**MySQL** شغّال.
+- على الماك: أول مرة ممكن يطلب كبسة يمين ← Open. إذا قال "permission denied" نفّذ مرة وحدة بالـTerminal داخل المجلد: `chmod +x *.command`.
+- عشان التلفونات توصل دايماً لنفس العنوان: ثبّت عنوان الجهاز من الراوتر (DHCP reservation)، ووقّف وضع السكون (Sleep) على الجهاز اللي عليه النظام. أول تشغيل على الويندوز رح يسأل الجدار الناري — اسمح على الشبكات الخاصة (Private).
+- احتفظ بنسخة من ملف `server/.env` بمكان آمن (فيه كلمة سر قاعدة البيانات وتوكن تيليغرام) — النسخ الاحتياطية بتحفظ البيانات، مش هالملف.
+- المدير: إذا لسا كلمة السر `admin123` النظام رح يطلع لك تنبيه أحمر لحد ما تغيّرها (زر المفتاح فوق).
+
+The same in English: **Start AMA** checks Node, creates `server/.env` on first
+run (with a random `JWT_SECRET`), installs packages and builds the web client
+when needed, starts the server in the background, waits until the database is
+ready, opens the browser and prints the phone address. If MySQL is down it says
+so in plain words and leaves nothing running. **Stop AMA** stops it (by its pid
+in `.ama_runtime/`, or whatever Node process holds the port). The server's
+output goes to `.ama_runtime/server.log`. Set `AMA_NO_BROWSER=1` to skip
+opening a browser (a screenless server).
+
+---
+
+## Quick start (developers)
 
 ### 1. Database
 
@@ -117,14 +148,89 @@ Four roles, same as the Flutter app:
 
 | Role | Arabic | Can do |
 |---|---|---|
-| maker | منشئ الطلبات | Create orders, manage active + archived, bulk-send archived, print, reports |
-| taker | المجهّز | See assigned orders, mark items collected/unavailable, add items, advance status |
+| maker | منشئ الطلبات | Create orders (for chosen takers, or open to any taker), manage active + archived, bulk-send archived, print, reports |
+| taker | المجهّز | See assigned orders, take open ones, mark items collected/unavailable, add items, advance status |
 | accounter | المحاسب | See completed orders, send to ERP, print |
-| admin | المدير | Stats, approve/manage users, all orders, activity logs, reports |
+| admin | المدير | Stats, approve / deactivate users, set passwords, all orders, activity logs, reports, backups |
 
 Order lifecycle: `pending` → `in-progress` → `completed` → `entered_erp`, with
 `archived` as a draft state outside the flow. "النشطة" in the UI means
 `pending` + `in-progress`.
+
+### Open orders ("مفتوح لأي مجهّز")
+
+Instead of picking takers, the maker can tick **مفتوح لأي مجهّز** — when
+creating an order, when sending archived orders out, or in the edit window. The
+order then appears for every taker under **طلبات مفتوحة** (with a count on the
+tab), and every taker linked to Telegram gets a "🔓 طلب مفتوح" message. The first
+taker to tap **خذ الطلب** gets it: it moves to their «طلباتي», disappears for
+everyone else, and the Telegram messages others received are edited to say who
+took it. The maker is told in the app.
+
+- **Exactly one taker wins**, however many tap at once: the claim locks the
+  order row (`POST /api/orders/:id/claim`). Tested with 4 takers tapping twice
+  each, 20 rounds — and the same test with the lock removed has all four
+  "winning", so the test really guards it.
+- "Open" is not a column: it means *pending with nobody assigned*
+  (`isOpenOrder` in `order_helpers.js`). It must be asked for — an active order
+  with no taker and no `openToAll` is still refused, so a forgotten taker does
+  not silently become an open order.
+- The maker can still assign an open order to someone, or open up an assigned
+  one. An order already **in progress** that is opened up goes back to pending
+  (its ticks are kept) and the previous taker loses access.
+- A taker cannot hand their order to someone else or drop it back (403) — that
+  is the maker's call.
+- The edits to old Telegram messages are remembered in memory only: after a
+  server restart, earlier "open order" messages are simply left as they were.
+  The app is what counts — a second taker always gets "someone beat you to it".
+
+### Accounts, passwords and sessions
+
+- **Sign-up never creates an admin.** It used to accept any role, including
+  `admin`, and admins were auto-approved — anyone who could reach the server
+  could make themselves an admin. The only admin is the one seeded on first start.
+- **Change your password** from the key button in the top bar. The admin can set
+  a new password for anyone who forgot theirs (Admin › المستخدمون). Either way,
+  that person's other sessions end.
+- **The seeded `admin123` password is nagged about** with a red banner until it
+  is changed.
+- **Deactivate, don't delete.** Deleting someone who has worked in the system is
+  refused: it used to delete *every order a maker had ever created* (completed
+  and ERP-entered ones included) and the history entries of anyone else.
+  **تعطيل** blocks the login instead and keeps everything; **تفعيل** undoes it.
+  Only someone with no orders or history at all (a mistaken sign-up) can be deleted.
+- **Sessions are re-checked on every request** (cached 15 s): a deactivated or
+  deleted account, or one whose password changed, loses access within seconds
+  even though tokens are issued for a year. A stale token now gets a JSON 401 and
+  the app shows the login page; it used to get a bare 403 and leave people stuck
+  on errors.
+- **Wrong passwords are throttled**: 8 failures for a username from one address
+  (30 per address overall) lock it for 15 minutes.
+- If `JWT_SECRET` is missing or still the example, the server uses a random one
+  for that run instead of a guessable constant (Start AMA writes a permanent one).
+
+### Backups
+
+The server backs the database up **by itself** while it runs: hourly it checks,
+and takes a backup if the newest is 6+ hours old *and* something changed. It
+keeps one per day for 30 days and one per month for a year
+(`BACKUP_KEEP_DAYS`). Admin › **النسخ الاحتياطي** shows the status, takes one on
+demand, and downloads any of them.
+
+- Each backup is one compressed SQL file in `backups/`, written by Node
+  (`server/utils/backup.js`) — no dependency on `mysqldump` being on the PATH.
+  It is taken from a single consistent snapshot, without blocking anyone, and
+  written to a temporary name first so a crash never leaves a half file that
+  looks good.
+- **Set `BACKUP_COPY_DIR`** to a second drive or a OneDrive / Google Drive folder.
+  A backup on the same disk as the database dies with that disk; the admin page
+  warns while this is not set.
+- **Restore** with *Restore AMA* (or `npm run db:restore` in `server/`). It refuses
+  while the system is running, refuses a damaged or cut-off file before touching
+  anything, asks you to type `RESTORE`, and takes a "before-restore" safety
+  backup first — restore that one to undo.
+- Backups contain everything, password hashes included. Keep them private.
+- `npm run db:backup` takes one from the command line.
 
 ### Keyboard shortcuts (order form)
 
@@ -325,14 +431,37 @@ drop the column and its data. Nothing reads or writes it.
 10. **Replaced the hardcoded `10.10.10.110` startup log** with real interface
     detection.
 
-### Still worth fixing (not changed)
+11. **Accounts and sessions** — the sign-up admin hole, destructive user
+    deletion, password change/reset, session re-checks, login throttling and the
+    `JWT_SECRET` fallback: see "Accounts, passwords and sessions" above.
+12. **Input limits enforced with a clear 400** instead of a database error (500):
+    customer name and item names up to 255 characters, description up to 5000,
+    quantity below 10,000,000, price 0 to 99,999,999.99, city from the list.
+13. **Search treats `%` and `_` literally** (they were LIKE wildcards: searching
+    "%" matched every order).
+14. **Order lists sort with a tie-breaker** (`id`). `createdAt` is stored to the
+    second and sending out archived orders stamps them all with the same second,
+    so paging could skip or repeat orders.
+15. **Deleting an order is all-or-nothing** (one transaction) - a failure half-way
+    used to leave an order without its items.
+16. **Notifications longer than 255 characters are shortened** instead of failing
+    (a long customer name used to report a saved order as an error).
+17. **Order event logs** (`server/logs/*.jsonl`) are deleted after 90 days
+    (`ORDER_LOG_KEEP_DAYS`), and the console gets one line per event instead of
+    pretty-printed JSON. A rejected promise is logged instead of stopping the
+    server, and responses carry `nosniff` / no-framing headers.
 
-- `JWT_SECRET` falls back to the literal string `your-secret-key` in
-  `middleware/auth.js` when unset.
-- Tokens last **365 days** and are stored in `localStorage`, so one lifted via
-  XSS stays valid for a year.
-- CORS reflects any origin with `credentials: true`.
-- The seeded `admin` / `admin123` is documented publicly in the Flutter README.
+### Still worth knowing
+
+- **HTTP only.** Fine on the shop's own network. Do **not** forward the port to
+  the internet as it is (the Flutter app points at a public address,
+  `213.6.226.163`): passwords would cross the internet in plain text. Use a VPN,
+  or put HTTPS in front first.
+- CORS allows any origin; harmless here because logins travel in a header, not a
+  cookie.
+- Two people making a **structural** edit to one order in the same second can
+  still lose one of the two changes (see TESTING.md). Ticks are not affected.
+- Reports page through the whole history in the browser (see above).
 
 ### A bug fixed in the client
 
@@ -351,10 +480,12 @@ The web client uses the hyphenated key throughout.
 | `client/` | `npm run build` | Production build into `dist/` |
 | `client/` | `npm run preview` | Serve the built output |
 | `client/` | `npm run lint` | ESLint |
-| `client/` | `npm test` | Unit tests (51) |
+| `client/` | `npm test` | Unit tests (57) |
 | `server/` | `npm run db:create` | Create the database with utf8mb4 |
 | `server/` | `npm run db:check` | Verify connection, charset and Arabic round-trip |
-| `server/` | `npm run test:integration` | 143 checks against the real server + MySQL, on a throwaway database. Add `-- telegram` to run one suite |
+| `server/` | `npm run db:backup` | Take a backup now |
+| `server/` | `npm run db:restore` | Restore a backup (stop the system first) |
+| `server/` | `npm run test:integration` | 329 checks in 6 suites against the real server + MySQL, on a throwaway database. Add `-- <name>` to run one suite, e.g. `-- security` |
 | `server/` | `npm run dev` | API with nodemon |
 | `server/` | `npm start` | API |
 | root | `node tools/mock-api.js` | Fake API, no database |
@@ -363,6 +494,7 @@ The web client uses the hyphenated key throughout.
 
 | Script | What |
 |---|---|
+| `Start AMA` / `Stop AMA` / `Restore AMA` | Daily use - see the top of this file (`scripts/launch.js`) |
 | `scripts\start-dev.cmd` | API + client, each in its own window |
 | `scripts\stop-dev.cmd` | Stops both |
 | `scripts\start-mock.cmd` | Mock API + client, no database needed |
@@ -431,8 +563,14 @@ used once.
 |---|---|---|---|
 | New order assigned | its takers | Telegram: "new order" | in-app only |
 | Archived order sent out | its takers | Telegram: "new order" | in-app only |
-| Maker edits an order | its takers | Telegram: "order updated" | in-app only |
+| Order left open to anyone | every taker | Telegram: "🔓 open order" | the «طلبات مفتوحة» tab |
+| Open order taken | every taker who got it | that message is edited to "taken by …" | - |
+| Taker added to an order | that taker | Telegram: "new order" | in-app only |
+| Maker or admin edits what takers see | its takers | Telegram: "order updated" | in-app only |
 | Taker completes an order | its accountant | Telegram: "ready for ERP" | in-app only |
+
+"What takers see" means the customer, city, description, items or quantities.
+A save that changed nothing, or only prices, sends nothing.
 
 Messages list the customer, city and items with quantities — **never prices**.
 Orders longer than 15 items are cut off with "and N more". The accountant's

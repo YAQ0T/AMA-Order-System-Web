@@ -65,6 +65,8 @@ const makeOrder = (index) => {
   });
 
   const created = new Date(Date.now() - index * 8.64e7);
+  // Every tenth order is left open to any taker (pending, nobody assigned).
+  const open = status === 'pending' && index % 10 === 0;
 
   return {
     id,
@@ -78,7 +80,7 @@ const makeOrder = (index) => {
     updatedAt: created.toISOString(),
     Maker: users[1],
     Accounter: status === 'archived' ? null : users[4],
-    AssignedTakers: status === 'archived' ? [] : [users[2], ...(index % 2 ? [users[3]] : [])],
+    AssignedTakers: status === 'archived' || open ? [] : [users[2], ...(index % 2 ? [users[3]] : [])],
     Items: items,
     History:
       index % 2 === 0
@@ -108,6 +110,18 @@ const activityLogs = Array.from({ length: 60 }, (_, i) => ({
   createdAt: new Date(Date.now() - i * 3.6e6).toISOString(),
   User: users[i % users.length],
 }));
+
+const mockBackups = [1, 2, 3].map((daysAgo) => {
+  const d = new Date(Date.now() - daysAgo * 8.64e7);
+  d.setHours(9, 0, 0, 0);
+  const pad = (n) => String(n).padStart(2, '0');
+  return {
+    name: `ama-backup-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_09-00-00.sql.gz`,
+    size: 46_000 - daysAgo * 900,
+    createdAt: d.toISOString(),
+    label: null,
+  };
+});
 
 const notifications = [
   { id: 1, message: 'تم إسناد طلب جديد إليك', isRead: false, type: 'info', orderId: 1, createdAt: new Date().toISOString() },
@@ -219,21 +233,42 @@ const server = http.createServer(async (req, res) => {
   };
 
   // ---- auth ----
+  // Any password works, except that the admin logging in with "admin123" is
+  // flagged to change it, as the real server does (routes/auth.js).
   if (pathname === '/api/auth/login' && req.method === 'POST') {
-    const { username } = await readBody();
+    const { username, password } = await readBody();
     const found = users.find((u) => u.username === username);
     if (!found) return send(401, { error: 'Invalid credentials' });
     if (!found.isApproved && found.role !== 'admin') {
+      if (found.approvedAt) return send(403, { error: 'This account has been deactivated', deactivated: true });
       return send(403, { error: 'Account pending admin approval', requiresApproval: true });
     }
-    return send(200, { token: tokenFor(found), user: found });
+    return send(200, {
+      token: tokenFor(found),
+      user: found,
+      mustChangePassword: found.role === 'admin' && password === 'admin123' && !found.passwordChanged,
+    });
   }
 
   if (pathname === '/api/auth/register' && req.method === 'POST') {
-    const { username, role } = await readBody();
+    const { username, role, password } = await readBody();
+    if (!['maker', 'taker', 'accounter'].includes(role)) return send(400, { error: 'Invalid role' });
+    if (!password || String(password).length < 6) return send(400, { error: 'Password must be at least 6 characters' });
+    if (users.some((u) => u.username.toLowerCase() === String(username).toLowerCase())) {
+      return send(409, { error: 'Username already taken' });
+    }
     const created = { id: users.length + 1, username, role, isApproved: false, prefersDark: false };
     users.push(created);
     return send(201, { message: 'User created successfully', requiresApproval: true });
+  }
+
+  if (pathname === '/api/auth/password' && req.method === 'PUT') {
+    if (needsAuth()) return undefined;
+    const { currentPassword, newPassword } = await readBody();
+    if (!newPassword || String(newPassword).length < 6) return send(400, { error: 'Password must be at least 6 characters' });
+    if (currentPassword === 'wrong') return send(400, { error: 'Current password is incorrect' });
+    user.passwordChanged = true;
+    return send(200, { token: tokenFor(user), user });
   }
 
   if (pathname === '/api/auth/me') {
@@ -250,12 +285,12 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/auth/takers') {
     if (needsAuth()) return undefined;
-    return send(200, users.filter((u) => u.role === 'taker').map(({ id, username, role }) => ({ id, username, role })));
+    return send(200, users.filter((u) => u.role === 'taker' && u.isApproved).map(({ id, username, role }) => ({ id, username, role })));
   }
 
   if (pathname === '/api/auth/accounters') {
     if (needsAuth()) return undefined;
-    return send(200, users.filter((u) => u.role === 'accounter').map(({ id, username, role }) => ({ id, username, role })));
+    return send(200, users.filter((u) => u.role === 'accounter' && u.isApproved).map(({ id, username, role }) => ({ id, username, role })));
   }
 
   // ---- orders ----
@@ -285,6 +320,14 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/orders' && req.method === 'POST') {
     if (needsAuth()) return undefined;
     const body = await readBody();
+    const archived = body.status === 'archived';
+    const hasTakers = (body.assignedTakerIds || []).length > 0;
+    if (!archived && body.openToAll === true && hasTakers) {
+      return send(400, { error: 'An open order cannot also be assigned to takers' });
+    }
+    if (!archived && body.openToAll !== true && !hasTakers) {
+      return send(400, { error: 'Active orders require at least one taker' });
+    }
     const created = {
       ...makeOrder(orders.length),
       id: nextOrderId++,
@@ -297,7 +340,7 @@ const server = http.createServer(async (req, res) => {
       createdAt: new Date().toISOString(),
       Maker: user,
       Accounter: users.find((u) => u.id === body.accounterId) || null,
-      AssignedTakers: users.filter((u) => (body.assignedTakerIds || []).includes(u.id)),
+      AssignedTakers: archived ? [] : users.filter((u) => (body.assignedTakerIds || []).includes(u.id)),
       History: [],
       Items: (body.items || []).map((item) => ({
         id: nextItemId++,
@@ -311,6 +354,39 @@ const server = http.createServer(async (req, res) => {
     };
     orders.unshift(created);
     return send(201, created);
+  }
+
+  // Open orders: pending with nobody assigned, oldest first - like
+  // fetchOpenOrders in server/routes/order_helpers.js.
+  if (pathname === '/api/orders/open' && req.method === 'GET') {
+    if (needsAuth()) return undefined;
+    if (user.role !== 'taker') return send(403, { error: 'Only takers can view open orders' });
+    const open = orders
+      .filter((o) => o.status === 'pending' && o.AssignedTakers.length === 0)
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    const limit = Math.min(Number(searchParams.get('limit')) || 20, 20);
+    const offset = Number(searchParams.get('offset')) || 0;
+    return send(200, {
+      orders: open.slice(offset, offset + limit).map((o) => forRole(o, 'taker')),
+      pagination: { total: open.length, limit, offset },
+    });
+  }
+
+  // First come, first served - mirrors POST /api/orders/:id/claim.
+  const claimMatch = pathname.match(/^\/api\/orders\/(\d+)\/claim$/);
+  if (claimMatch && req.method === 'POST') {
+    if (needsAuth()) return undefined;
+    if (user.role !== 'taker') return send(403, { error: 'Only takers can take open orders' });
+    const order = orders.find((o) => o.id === Number(claimMatch[1]));
+    if (!order) return send(404, { error: 'Order not found' });
+    const mine = order.AssignedTakers.some((t) => t.id === user.id);
+    if (!mine) {
+      if (order.status !== 'pending' || order.AssignedTakers.length > 0) {
+        return send(409, { error: 'This order has already been taken', code: 'ORDER_TAKEN' });
+      }
+      order.AssignedTakers = [user];
+    }
+    return send(200, forRole(order, 'taker'));
   }
 
   const orderMatch = pathname.match(/^\/api\/orders\/(\d+)$/);
@@ -328,6 +404,30 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'PUT') {
       const body = await readBody();
       const order = orders[index];
+
+      // Open orders, as in routes/orders.js: openToAll clears the takers; an
+      // active order may only be left without one when that was asked for
+      // (or it already was open); an order in progress released this way
+      // starts over as pending.
+      const wantsOpen = body.openToAll === true;
+      if (wantsOpen && (body.assignedTakerIds || []).length > 0) {
+        return send(400, { error: 'An open order cannot also be assigned to takers' });
+      }
+      const wasOpen = order.status === 'pending' && order.AssignedTakers.length === 0;
+      const nextTakers = wantsOpen
+        ? []
+        : Array.isArray(body.assignedTakerIds)
+          ? users.filter((u) => body.assignedTakerIds.includes(u.id))
+          : order.AssignedTakers;
+      const nextStatus = body.status || order.status;
+      let release = false;
+      if (['pending', 'in-progress'].includes(nextStatus) && nextTakers.length === 0) {
+        release = !body.status && order.status === 'in-progress' && wantsOpen;
+        if (!release && (nextStatus === 'in-progress' || (!wantsOpen && !wasOpen))) {
+          return send(400, { error: 'Active orders require at least one taker' });
+        }
+      }
+
       if (body.title !== undefined) order.title = body.title;
       if (body.description !== undefined) order.description = body.description;
       if (body.city !== undefined) order.city = body.city;
@@ -336,9 +436,8 @@ const server = http.createServer(async (req, res) => {
         order.accounterId = body.accounterId;
         order.Accounter = users.find((u) => u.id === body.accounterId) || null;
       }
-      if (Array.isArray(body.assignedTakerIds)) {
-        order.AssignedTakers = users.filter((u) => body.assignedTakerIds.includes(u.id));
-      }
+      if (wantsOpen || Array.isArray(body.assignedTakerIds)) order.AssignedTakers = nextTakers;
+      if (release) order.status = 'pending';
       if (Array.isArray(body.items)) {
         // Faithful to the real server: routes/orders.js destroys every
         // OrderItem row and bulkCreates replacements, so item IDs ROTATE on
@@ -464,30 +563,101 @@ const server = http.createServer(async (req, res) => {
       recentActivity: activityLogs.slice(0, 8),
     });
   }
+  // Pending = never approved; approved once but not now = deactivated
+  // (approvedAt set), exactly as in routes/admin.js.
   if (pathname === '/api/admin/users/pending') {
     if (needsAuth()) return undefined;
-    return send(200, users.filter((u) => !u.isApproved));
+    return send(200, users.filter((u) => !u.isApproved && !u.approvedAt && u.role !== 'admin'));
   }
   if (pathname === '/api/admin/users') {
     if (needsAuth()) return undefined;
-    return send(200, users);
+    return send(200, users.map(({ passwordChanged, ...u }) => ({
+      ...u,
+      approvedAt: u.approvedAt ?? (u.isApproved ? '2026-01-01T00:00:00.000Z' : null),
+    })));
   }
   if (/^\/api\/admin\/users\/\d+\/approve$/.test(pathname)) {
     const id = Number(pathname.split('/')[4]);
     const u = users.find((x) => x.id === id);
-    if (u) u.isApproved = true;
+    if (u) {
+      u.isApproved = true;
+      u.approvedAt = new Date().toISOString();
+    }
     return send(200, { message: 'approved' });
   }
+  if (/^\/api\/admin\/users\/\d+\/deactivate$/.test(pathname) && req.method === 'PUT') {
+    const id = Number(pathname.split('/')[4]);
+    const u = users.find((x) => x.id === id);
+    if (!u) return send(404, { error: 'User not found' });
+    if (u.role === 'admin') return send(400, { error: 'An admin account cannot be deactivated' });
+    u.isApproved = false;
+    u.approvedAt = u.approvedAt || new Date().toISOString();
+    const activeAssignments = orders.filter((o) => ACTIVE.includes(o.status) && o.AssignedTakers.some((t) => t.id === id)).length;
+    return send(200, { message: 'User deactivated', activeAssignments });
+  }
+  if (/^\/api\/admin\/users\/\d+\/password$/.test(pathname) && req.method === 'PUT') {
+    const { newPassword } = await readBody();
+    if (!newPassword || String(newPassword).length < 6) return send(400, { error: 'Password must be at least 6 characters' });
+    return send(200, { message: 'Password changed' });
+  }
+  // Like the real server: only someone who never worked on an order can be deleted.
   if (/^\/api\/admin\/users\/\d+$/.test(pathname) && req.method === 'DELETE') {
     const id = Number(pathname.split('/')[4]);
     const i = users.findIndex((x) => x.id === id);
-    if (i !== -1) users.splice(i, 1);
+    if (i === -1) return send(404, { error: 'User not found' });
+    const worked = orders.some((o) => o.makerId === id || o.accounterId === id || o.AssignedTakers.some((t) => t.id === id));
+    if (worked) {
+      return send(409, {
+        error: 'This user has orders or history, so deleting them would erase it. Deactivate the account instead.',
+        code: 'USER_HAS_HISTORY',
+      });
+    }
+    users.splice(i, 1);
     return send(200, { message: 'deleted' });
   }
   if (pathname === '/api/admin/logs' || pathname === '/api/admin/logs/all') {
     if (needsAuth()) return undefined;
     const limit = Number(searchParams.get('limit')) || 50;
     return send(200, activityLogs.slice(0, limit));
+  }
+
+  // ---- backups (shape of server/routes/backups.js; no real files) ----
+  if (pathname === '/api/admin/backups') {
+    if (needsAuth()) return undefined;
+    if (user.role !== 'admin') return send(403, { error: 'Admin access required' });
+    if (req.method === 'POST') {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const name = `ama-backup-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}-manual.sql.gz`;
+      const entry = { name, size: 48_000 + mockBackups.length * 1_500, createdAt: d.toISOString(), label: 'manual' };
+      mockBackups.unshift(entry);
+      return send(201, { ...entry, tables: { Orders: orders.length, Users: users.length } });
+    }
+    const latest = mockBackups[0];
+    return send(200, {
+      status: {
+        auto: true,
+        dir: 'C:\\AMA\\backups',
+        copyDir: null,
+        keepDays: 30,
+        running: false,
+        lastSuccess: latest ? { name: latest.name, at: latest.createdAt, size: latest.size } : null,
+        lastError: null,
+        lastCopyError: null,
+      },
+      backups: mockBackups,
+    });
+  }
+  const backupDownload = pathname.match(/^\/api\/admin\/backups\/([^/]+)\/download$/);
+  if (backupDownload) {
+    if (needsAuth()) return undefined;
+    if (user.role !== 'admin') return send(403, { error: 'Admin access required' });
+    const name = decodeURIComponent(backupDownload[1]);
+    if (!mockBackups.some((b) => b.name === name)) return send(404, { error: 'Backup not found' });
+    await delay();
+    res.writeHead(200, { 'Content-Type': 'application/gzip', 'Content-Disposition': `attachment; filename="${name}"` });
+    res.end(require('zlib').gzipSync('-- AMA Order System backup\n-- (mock)\n-- Backup complete\n'));
+    return undefined;
   }
 
   if (pathname === '/api/health') return send(200, { ok: true, mock: true });

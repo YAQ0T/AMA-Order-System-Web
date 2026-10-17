@@ -1,5 +1,44 @@
 const { Op } = require('sequelize');
-const { Order, OrderLog } = require('../db');
+const { Order, OrderLog, User, sequelize } = require('../db');
+
+/**
+ * An "open" order is active (pending) with no taker assigned: any taker may
+ * take it, first come first served (POST /api/orders/:id/claim). There is no
+ * column for this - it is derived from the status and the assignments, so an
+ * order can never be both "open" and assigned to someone.
+ */
+const isOpenOrder = (order) =>
+    order?.status === 'pending' && (order.AssignedTakers || []).length === 0;
+
+/**
+ * Throws a 400-style error unless every id belongs to an approved taker. Without
+ * this, any user id - a maker, an accountant, a deleted account - could be
+ * "assigned" to an order and the order would silently reach nobody.
+ */
+const assertTakerIds = async (ids, { transaction } = {}) => {
+    if (!Array.isArray(ids)) {
+        const err = new Error('assignedTakerIds must be a list');
+        err.status = 400;
+        throw err;
+    }
+    const unique = [...new Set(ids.map(Number))];
+    if (unique.some((id) => !Number.isInteger(id))) {
+        const err = new Error('Invalid taker selection');
+        err.status = 400;
+        throw err;
+    }
+    if (unique.length === 0) return unique;
+    const found = await User.count({
+        where: { id: unique, role: 'taker', isApproved: true },
+        transaction
+    });
+    if (found !== unique.length) {
+        const err = new Error('Invalid taker selection');
+        err.status = 400;
+        throw err;
+    }
+    return unique;
+};
 
 const getItemAttributesForRole = (role) => {
     const baseAttributes = ['id', 'name', 'quantity', 'status', 'createdAt', 'updatedAt'];
@@ -29,6 +68,11 @@ const sanitizeItems = (items, { allowEmpty = false } = {}) => {
         if (!name) {
             throw new Error(`Item ${index + 1} is missing a name`);
         }
+        // OrderItems.name is VARCHAR(255). MySQL refuses longer values outright,
+        // which used to surface as a bare 500.
+        if (name.length > 255) {
+            throw new Error(`Item name is too long (max 255 characters): "${name.slice(0, 40)}..."`);
+        }
 
         if (typeof quantityRaw === 'string' && !numericPattern.test(quantityRaw)) {
             throw new Error(`Invalid quantity for "${name}"`);
@@ -41,7 +85,8 @@ const sanitizeItems = (items, { allowEmpty = false } = {}) => {
                 throw new Error(`Invalid price for "${name}"`);
             }
             const priceNumRaw = Number(priceRaw);
-            if (!Number.isFinite(priceNumRaw)) {
+            // DECIMAL(10,2): at most 99,999,999.99.
+            if (!Number.isFinite(priceNumRaw) || priceNumRaw < 0 || priceNumRaw >= 1e8) {
                 throw new Error(`Invalid price for "${name}"`);
             }
             priceNum = priceNumRaw;
@@ -50,7 +95,8 @@ const sanitizeItems = (items, { allowEmpty = false } = {}) => {
             ? Math.round(quantityNum * 1000) / 1000
             : quantityNum;
 
-        if (!Number.isFinite(quantityNum) || quantityNum <= 0) {
+        // DECIMAL(10,3): at most 9,999,999.999.
+        if (!Number.isFinite(quantityNum) || quantityNum <= 0 || quantityNum >= 1e7) {
             throw new Error(`Invalid quantity for "${name}"`);
         }
 
@@ -100,11 +146,40 @@ const buildOrderIncludes = (role, options = {}) => {
             include: [{ association: OrderLog.associations.Editor, attributes: ['id', 'username'] }],
             separate: true,
             limit: historyLimit,
-            order: [['createdAt', 'DESC']]
+            order: [['createdAt', 'DESC'], ['id', 'DESC']]
         });
     }
 
     return includes;
+};
+
+// createdAt is stored to the second, and sending out a batch of archived orders
+// stamps them all with the same second. Without a tie-breaker MySQL may order
+// those ties differently on each query, so paging could skip or repeat orders.
+const NEWEST_FIRST = [['createdAt', 'DESC'], ['id', 'DESC']];
+
+/**
+ * Make user text match literally inside LIKE: without this, searching for
+ * "50%" or "a_b" treats % and _ as wildcards (a lone "%" matched everything).
+ * Backslash is MySQL's default LIKE escape character.
+ */
+const escapeLike = (text) => String(text).replace(/[\\%_]/g, (c) => `\\${c}`);
+
+/** Field checks shared by create and edit, so bad input is a 400, not a database error. */
+const ORDER_TITLE_MAX = 255;
+const ORDER_DESCRIPTION_MAX = 5000;
+const orderFieldsProblem = ({ title, description, city }) => {
+    if (title != null && (typeof title !== 'string' || title.length > ORDER_TITLE_MAX)) {
+        return `Customer name is too long (max ${ORDER_TITLE_MAX} characters)`;
+    }
+    if (description != null && (typeof description !== 'string' || description.length > ORDER_DESCRIPTION_MAX)) {
+        return `Description is too long (max ${ORDER_DESCRIPTION_MAX} characters)`;
+    }
+    if (city != null && city !== '') {
+        const allowed = Order.rawAttributes.city?.validate?.isIn?.[0] || [];
+        if (!allowed.includes(city)) return 'Invalid city';
+    }
+    return null;
 };
 
 const getPaginationParams = (req) => {
@@ -141,10 +216,11 @@ const buildSearchWhere = (req, { forceActiveStatuses = false } = {}) => {
 
     const search = (req.query.search || '').trim();
     if (search) {
+        const pattern = `%${escapeLike(search)}%`;
         where[Op.or] = [
-            { title: { [Op.like]: `%${search}%` } },
-            { description: { [Op.like]: `%${search}%` } },
-            { city: { [Op.like]: `%${search}%` } }
+            { title: { [Op.like]: pattern } },
+            { description: { [Op.like]: pattern } },
+            { city: { [Op.like]: pattern } }
         ];
     }
 
@@ -164,7 +240,7 @@ const fetchOrdersForRole = async (req, effectiveRole, options = {}) => {
         result = await Order.findAndCountAll({
             where: { ...where, makerId: req.user.id },
             include: includeOptions,
-            order: [['createdAt', 'DESC']],
+            order: NEWEST_FIRST,
             limit,
             offset,
             distinct: true
@@ -193,7 +269,7 @@ const fetchOrdersForRole = async (req, effectiveRole, options = {}) => {
         result = await Order.findAndCountAll({
             where: accounterWhere,
             include: includeOptions,
-            order: [['createdAt', 'DESC']],
+            order: NEWEST_FIRST,
             limit,
             offset,
             distinct: true
@@ -202,7 +278,7 @@ const fetchOrdersForRole = async (req, effectiveRole, options = {}) => {
         result = await Order.findAndCountAll({
             where,
             include: includeOptions,
-            order: [['createdAt', 'DESC']],
+            order: NEWEST_FIRST,
             limit,
             offset,
             distinct: true
@@ -247,7 +323,7 @@ const fetchOrdersForRole = async (req, effectiveRole, options = {}) => {
         result = await Order.findAndCountAll({
             where: takerWhere,
             include: includeOptions,
-            order: [['createdAt', 'DESC']],
+            order: NEWEST_FIRST,
             limit,
             offset,
             distinct: true
@@ -262,11 +338,45 @@ const fetchOrdersForRole = async (req, effectiveRole, options = {}) => {
     };
 };
 
+/**
+ * Open orders, for takers to pick from: pending with no assignment at all.
+ * Oldest first, so the customer who has waited longest is served first.
+ */
+const fetchOpenOrders = async (req) => {
+    const { limit, offset } = getPaginationParams(req);
+    const { where } = buildSearchWhere(req, {});
+    const { OrderAssignments } = require('../db');
+    const qi = sequelize.getQueryInterface();
+    const assignments = qi.quoteIdentifier(String(OrderAssignments.getTableName()));
+    const orderIdCol = qi.quoteIdentifier('orderId');
+
+    const result = await Order.findAndCountAll({
+        where: {
+            ...where,
+            status: 'pending',
+            // orderId is NOT NULL, so NOT IN has none of its NULL surprises.
+            id: { [Op.notIn]: sequelize.literal(`(SELECT ${orderIdCol} FROM ${assignments})`) }
+        },
+        include: buildOrderIncludes('taker', { includeHistory: false }),
+        order: [['createdAt', 'ASC'], ['id', 'ASC']],
+        limit,
+        offset,
+        distinct: true
+    });
+
+    return { rows: result.rows, count: result.count, limit, offset };
+};
+
 module.exports = {
     getItemAttributesForRole,
     sanitizeItems,
     buildOrderIncludes,
     getPaginationParams,
     buildSearchWhere,
-    fetchOrdersForRole
+    fetchOrdersForRole,
+    fetchOpenOrders,
+    isOpenOrder,
+    assertTakerIds,
+    escapeLike,
+    orderFieldsProblem
 };

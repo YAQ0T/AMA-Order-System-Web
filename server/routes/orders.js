@@ -6,7 +6,7 @@ const telegram = require('../utils/telegram');
 const { logActivity } = require('../utils/activityLogger');
 const { logOrderEvent } = require('../utils/orderRequestLogger');
 const { Op } = require('sequelize');
-const { sanitizeItems, buildOrderIncludes, fetchOrdersForRole } = require('./order_helpers');
+const { sanitizeItems, buildOrderIncludes, fetchOrdersForRole, isOpenOrder, assertTakerIds, escapeLike, orderFieldsProblem } = require('./order_helpers');
 
 const router = express.Router();
 
@@ -144,12 +144,15 @@ router.post('/', authenticateToken, async (req, res) => {
             return res.status(403).json({ error: 'Only makers or admins can create orders' });
         }
 
-        const { title, description, assignedTakerIds, items, city, status, accounterId } = req.body;
-        console.log('Creating order:', { title, assignedTakerIds, makerId: req.user.id, city, status });
+        const { title, description, items, city, status, accounterId, openToAll } = req.body;
+        let { assignedTakerIds } = req.body;
         await logOrderEvent('ORDER_CREATE_START', {
             actor: actorInfo,
             request: summarizeUpdateRequestForLog(req.body)
         });
+
+        const fieldsProblem = orderFieldsProblem({ title, description, city });
+        if (fieldsProblem) return res.status(400).json({ error: fieldsProblem });
 
         const sanitizedItems = sanitizeItems(items || []);
 
@@ -160,13 +163,29 @@ router.post('/', authenticateToken, async (req, res) => {
 
         const orderStatus = status === 'archived' ? 'archived' : 'pending';
         const normalizedAccounterId = accounterId === '' ? null : accounterId;
+        // An open order goes to no one in particular: the first taker to take
+        // it gets it (POST /api/orders/:id/claim). It has to be asked for
+        // explicitly, so a maker who simply forgot to pick a taker is still
+        // stopped by the check below instead of creating an open order.
+        const isOpen = orderStatus !== 'archived' && openToAll === true;
 
         if (orderStatus !== 'archived') {
-            if (!Array.isArray(assignedTakerIds) || assignedTakerIds.length == 0) {
+            const hasTakers = Array.isArray(assignedTakerIds) && assignedTakerIds.length > 0;
+            if (isOpen && hasTakers) {
+                return res.status(400).json({ error: 'An open order cannot also be assigned to takers' });
+            }
+            if (!isOpen && !hasTakers) {
                 return res.status(400).json({ error: 'Active orders require at least one taker' });
             }
             if (normalizedAccounterId === undefined || normalizedAccounterId === null) {
                 return res.status(400).json({ error: 'Active orders require an accounter' });
+            }
+            if (hasTakers) {
+                try {
+                    assignedTakerIds = await assertTakerIds(assignedTakerIds);
+                } catch (err) {
+                    return res.status(err.status || 400).json({ error: err.message });
+                }
             }
         }
 
@@ -240,8 +259,18 @@ router.post('/', authenticateToken, async (req, res) => {
                 });
         }
 
+        // An open order is offered to every linked taker at once. Takers who
+        // have not linked Telegram see it in the app's "open orders" tab.
+        if (isOpen) {
+            const maker = await User.findByPk(req.user.id, { attributes: ['id', 'username'] });
+            telegram.broadcastOpenOrder(completeOrder, maker).catch(err => {
+                console.error('Error announcing open order:', err);
+            });
+        }
+
         await logActivity(req.user.id, 'order_created', 'order', order.id, {
             status: orderStatus,
+            openToAll: isOpen,
             city,
             itemCount: sanitizedItems?.length || 0,
             assignedTakers: assignedTakerIds || [],
@@ -283,8 +312,9 @@ router.post('/', authenticateToken, async (req, res) => {
             'Invalid quantity',
             'Invalid price',
             'Duplicate item',
-            'missing a name'
-        ].some(marker => (error.message || '').includes(marker));
+            'missing a name',
+            'too long'
+        ].some(marker => (error.message || '').includes(marker)) || error.name === 'SequelizeValidationError';
 
         res.status(isValidationError ? 400 : 500).json({ error: error.message });
     }
@@ -316,15 +346,16 @@ router.put('/:id', authenticateToken, async (req, res) => {
     let beforeOrderSnapshot = null;
     let beforeItemsSnapshot = [];
     try {
-        console.log(`PUT /api/orders/${req.params.id} hit by user: ${req.user.username} (${req.user.role})`);
-        console.log('Request body:', req.body);
         await logOrderEvent('ORDER_UPDATE_START', {
             actor: actorInfo,
             orderId: Number(req.params.id),
             request: summarizeUpdateRequestForLog(req.body)
         });
 
-        const { status, title, description, items, assignedTakerIds, accounterId } = req.body;
+        const { status, title, description, items, accounterId, openToAll } = req.body;
+        let { assignedTakerIds } = req.body;
+        const wantsOpen = openToAll === true;
+        const editorIsManager = req.user.role === 'maker' || req.user.role === 'admin';
 
         // Track which incoming items explicitly included a status field (even if null)
         const statusProvidedByName = new Map();
@@ -343,6 +374,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
                 }
             }
         }
+
+        const fieldsProblem = orderFieldsProblem({ title, description, city: req.body.city });
+        if (fieldsProblem) return res.status(400).json({ error: fieldsProblem });
 
         const sanitizedItems = Array.isArray(items) ? sanitizeItems(items) : null;
         let takersToNotifyOnResend = [];
@@ -453,9 +487,34 @@ router.put('/:id', authenticateToken, async (req, res) => {
             return res.status(403).json({ error: 'Not authorized to edit this order' });
         }
 
+        // Who works on an order is the maker's decision: a taker must not be
+        // able to hand an order to someone else, or drop it.
+        if (!isMaker && !isAdmin && (openToAll !== undefined || assignedTakerIds !== undefined)) {
+            const currentIds = (order.AssignedTakers || []).map(t => t.id).sort().join(',');
+            const sentIds = Array.isArray(assignedTakerIds) ? [...assignedTakerIds].map(Number).sort().join(',') : null;
+            if (openToAll !== undefined || sentIds !== currentIds) {
+                return res.status(403).json({ error: 'Only makers or admins can assign takers' });
+            }
+            assignedTakerIds = undefined; // unchanged - nothing to do
+        }
+
+        const sentTakers = Array.isArray(assignedTakerIds) && assignedTakerIds.length > 0;
+        if (wantsOpen && sentTakers) {
+            return res.status(400).json({ error: 'An open order cannot also be assigned to takers' });
+        }
+        if (sentTakers) {
+            try {
+                assignedTakerIds = await assertTakerIds(assignedTakerIds);
+            } catch (err) {
+                return res.status(err.status || 400).json({ error: err.message });
+            }
+        }
+        // openToAll means "nobody in particular": it clears the takers.
+        const takerUpdate = wantsOpen ? [] : assignedTakerIds;
+
         const isUnarchiving = order.status === 'archived' && status && status !== 'archived';
         if (isUnarchiving) {
-            if (!Array.isArray(assignedTakerIds) || assignedTakerIds.length == 0) {
+            if (!sentTakers && !wantsOpen) {
                 return res.status(400).json({ error: 'Select at least one taker before activating an archived order' });
             }
             if (accounterId === undefined || accounterId === null || accounterId === '') {
@@ -482,8 +541,38 @@ router.put('/:id', authenticateToken, async (req, res) => {
             transaction
         });
 
+        // Open orders: check the state this request would leave the order in,
+        // against the row as it is NOW (read under the lock - a taker may have
+        // just taken it).
+        const wasOpen = isOpenOrder(order);
+        const currentTakerIds = (order.AssignedTakers || []).map(t => t.id);
+        const nextTakerIds = takerUpdate !== undefined ? (takerUpdate || []) : currentTakerIds;
+        const nextStatus = status || order.status;
+        let releaseToOpen = false;
+        if ((nextStatus === 'pending' || nextStatus === 'in-progress') && nextTakerIds.length === 0) {
+            let refusal = null;
+            if (!status && order.status === 'in-progress' && wantsOpen) {
+                // The maker takes an order away from whoever was working on
+                // it and puts it back up for anyone: it starts over as pending.
+                releaseToOpen = true;
+            } else if (nextStatus === 'in-progress') {
+                refusal = 'An order in progress needs a taker';
+            } else if (!wantsOpen && !wasOpen) {
+                refusal = isUnarchiving
+                    ? 'Select at least one taker before activating an archived order'
+                    : 'Active orders require at least one taker';
+            }
+            if (refusal) {
+                await transaction.rollback();
+                transaction = null;
+                return res.status(400).json({ error: refusal });
+            }
+        }
+        let addedTakerIds = [];
+        let itemsChangedForTakers = false;
+
         // Handle Details Update (Title, Description, Items, City)
-        if (title !== undefined || description !== undefined || items !== undefined || assignedTakerIds !== undefined || req.body.city !== undefined) {
+        if (title !== undefined || description !== undefined || items !== undefined || takerUpdate !== undefined || req.body.city !== undefined) {
             // Log Title Change
             if (title && title !== order.title) {
                 await OrderLog.create({
@@ -563,6 +652,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
                         const oldQty = oldItemsMap.get(name);
                         isUpdate.set(name, true); // Mark as existing item
                         if (oldQty !== newQty) {
+                            itemsChangedForTakers = true;
                             await OrderLog.create({
                                 orderId: order.id,
                                 previousDescription: String(oldQty),
@@ -573,6 +663,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
                         oldItemsMap.delete(name); // processed
                     } else {
                         isUpdate.set(name, false); // Mark as new item
+                        itemsChangedForTakers = true;
                         await OrderLog.create({
                             orderId: order.id,
                             previousDescription: 'None',
@@ -584,6 +675,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
                 // Check for Removals (remaining items in oldItemsMap)
                 for (const [name, oldQty] of oldItemsMap) {
+                    itemsChangedForTakers = true;
                     await OrderLog.create({
                         orderId: order.id,
                         previousDescription: `${name} (${oldQty})`,
@@ -659,9 +751,8 @@ router.put('/:id', authenticateToken, async (req, res) => {
             }
 
             // Handle Assigned Takers Update
-            if (assignedTakerIds !== undefined) {
-                const currentTakerIds = (order.AssignedTakers || []).map(t => t.id);
-                const newTakerIds = assignedTakerIds || [];
+            if (takerUpdate !== undefined) {
+                const newTakerIds = nextTakerIds;
 
                 const isDifferent =
                     currentTakerIds.length !== newTakerIds.length ||
@@ -674,15 +765,15 @@ router.put('/:id', authenticateToken, async (req, res) => {
                     await OrderLog.create({
                         orderId: order.id,
                         previousDescription: 'Takers Updated',
-                        newDescription: 'Updated Assigned Takers',
+                        newDescription: newTakerIds.length === 0 ? 'Opened to any taker' : 'Updated Assigned Takers',
                         changedBy: req.user.id
                     }, { transaction });
 
                     // Notify New Takers
-                    const addedTakers = newTakerIds.filter(id => !currentTakerIds.includes(id));
-                    if (addedTakers.length > 0) {
+                    addedTakerIds = newTakerIds.filter(id => !currentTakerIds.includes(id));
+                    if (addedTakerIds.length > 0 && order.status !== 'archived') {
                         await Notification.bulkCreate(
-                            addedTakers.map(id => ({
+                            addedTakerIds.map(id => ({
                                 userId: id,
                                 message: `You have been assigned to order #${order.id}: ${order.title || 'Untitled'}`,
                                 type: 'alert',
@@ -695,6 +786,17 @@ router.put('/:id', authenticateToken, async (req, res) => {
                     changeSummary.push('assignedTakers');
                 }
             }
+        }
+
+        if (releaseToOpen) {
+            await OrderLog.create({
+                orderId: order.id,
+                previousDescription: order.status,
+                newDescription: `Status: ${order.status} -> pending`,
+                changedBy: req.user.id
+            }, { transaction });
+            order.status = 'pending';
+            changeSummary.push('status');
         }
 
         // Handle Status Update
@@ -760,16 +862,20 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
         await order.save({ transaction });
 
-        // General Notification for Edits (Title/Description/Items/Assigned Takers)
-        // If Maker edits, notify ALL current takers
-        if (
-            req.user.role === 'maker' &&
-            (req.body.title || req.body.description || req.body.items || req.body.assignedTakerIds || req.body.city)
-        ) {
+        // Did anything a taker can see change? Prices are not visible to them,
+        // and a save that changed nothing should not ping anyone's phone.
+        const changedForTakers = itemsChangedForTakers ||
+            changeSummary.some(c => c === 'title' || c === 'city' || c === 'description');
+
+        // General Notification for Edits (Title/Description/Items)
+        // If the maker (or an admin) edits, notify the takers who were already on the order
+        // (newly added ones were just told they are assigned).
+        if (editorIsManager && changedForTakers && order.status !== 'archived') {
             const currentTakers = await order.getAssignedTakers({ transaction });
-            if (currentTakers.length > 0) {
+            const toTell = currentTakers.filter(t => !addedTakerIds.includes(t.id));
+            if (toTell.length > 0) {
                 await Notification.bulkCreate(
-                    currentTakers.map(t => ({
+                    toTell.map(t => ({
                         userId: t.id,
                         message: `Order #${order.id} was updated by Maker`,
                         type: 'info',
@@ -856,21 +962,40 @@ router.put('/:id', authenticateToken, async (req, res) => {
         // There is no email. Makers and accountants are told through the
         // in-app notifications created inside the transaction above.
         //
-        // When the MAKER changes an order, its takers are messaged on Telegram
-        // (unless it is already entered into ERP). Sending an archived order
-        // out is new work for them, so it gets the "new order" message rather
-        // than "order updated" - one message, not both. Takers who have not
-        // linked Telegram see it in the app's notifications.
-        if (req.user.role === 'maker' && updatedOrder.AssignedTakers && updatedOrder.AssignedTakers.length > 0 && updatedOrder.status !== 'entered_erp') {
-            const editor = await User.findByPk(req.user.id, { attributes: ['id', 'username'] });
+        // When the MAKER (or an admin) changes an order, its takers are
+        // messaged on Telegram (unless it is archived or already entered into
+        // ERP). Whoever is new to the order - every taker, when an archived
+        // order is sent out - gets "new order"; the others get "order updated",
+        // and only if something they can see changed. One message each, never
+        // both. Takers who have not linked Telegram see it in the app.
+        const liveForTakers = !['archived', 'entered_erp'].includes(updatedOrder.status);
+        if (editorIsManager && liveForTakers && updatedOrder.AssignedTakers && updatedOrder.AssignedTakers.length > 0) {
             const isSendOut = takersToNotifyOnResend.length > 0;
-            const buildText = isSendOut
-                ? () => telegram.orderAssignedMessage(updatedOrder, editor)
-                : () => telegram.orderUpdatedMessage(updatedOrder, editor);
+            const isNew = (t) => isSendOut || addedTakerIds.includes(t.id);
+            const newcomers = updatedOrder.AssignedTakers.filter(isNew);
+            const others = changedForTakers ? updatedOrder.AssignedTakers.filter(t => !isNew(t)) : [];
 
-            telegram.deliverTo(updatedOrder.AssignedTakers, buildText).catch(err => {
-                console.error('Error notifying takers of order update:', err);
-            });
+            if (newcomers.length || others.length) {
+                const editor = await User.findByPk(req.user.id, { attributes: ['id', 'username'] });
+                telegram.deliverTo(newcomers, () => telegram.orderAssignedMessage(updatedOrder, editor))
+                    .catch(err => console.error('Error notifying newly assigned takers:', err));
+                telegram.deliverTo(others, () => telegram.orderUpdatedMessage(updatedOrder, editor))
+                    .catch(err => console.error('Error notifying takers of order update:', err));
+            }
+        }
+
+        // The order just became open (created archived and sent out open, or
+        // released by the maker): offer it to every linked taker. Or it just
+        // stopped being open (the maker assigned it or archived it): update
+        // the messages that offered it.
+        const isOpenNow = isOpenOrder(updatedOrder);
+        if (!wasOpen && isOpenNow) {
+            const editor = await User.findByPk(req.user.id, { attributes: ['id', 'username'] });
+            telegram.broadcastOpenOrder(updatedOrder, editor)
+                .catch(err => console.error('Error announcing open order:', err));
+        } else if (wasOpen && !isOpenNow) {
+            telegram.closeOpenOrder(order.id, null)
+                .catch(err => console.error('Error updating open-order messages:', err));
         }
 
         res.json(updatedOrder);
@@ -899,8 +1024,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
             'Invalid quantity',
             'Invalid price',
             'Duplicate item',
-            'missing a name'
-        ].some(marker => (error.message || '').includes(marker));
+            'missing a name',
+            'too long'
+        ].some(marker => (error.message || '').includes(marker)) || error.name === 'SequelizeValidationError';
 
         res.status(isValidationError ? 400 : 500).json({ error: error.message });
     }
@@ -920,7 +1046,7 @@ router.get('/suggestions', authenticateToken, async (req, res) => {
             where: {
                 makerId: req.user.id,
                 title: {
-                    [Op.like]: `%${q}%`
+                    [Op.like]: `%${escapeLike(q)}%`
                 }
             },
             limit: 6,
@@ -959,12 +1085,20 @@ router.delete('/:id', authenticateToken, async (req, res) => {
             return res.status(403).json({ error: 'You can only delete your own orders' });
         }
 
-        // Delete associated items and logs first (manual cascade)
-        await OrderItem.destroy({ where: { orderId: order.id } });
-        await OrderLog.destroy({ where: { orderId: order.id } });
+        const wasOpen = isOpenOrder(order);
 
-        // Delete the order
-        await order.destroy();
+        // Delete associated items and logs first (manual cascade), all or
+        // nothing: a failure half-way must not leave an order without items.
+        await sequelize.transaction(async (transaction) => {
+            await OrderItem.destroy({ where: { orderId: order.id }, transaction });
+            await OrderLog.destroy({ where: { orderId: order.id }, transaction });
+            await order.destroy({ transaction });
+        });
+
+        if (wasOpen) {
+            telegram.closeOpenOrder(order.id, null)
+                .catch(err => console.error('Error updating open-order messages:', err));
+        }
 
         await logOrderEvent('ORDER_DELETE_SUCCESS', {
             actor: actorInfo,

@@ -54,6 +54,29 @@ export async function fetchOrders({
   return parseOr(orderListSchema, data, { orders: [], pagination: { total: 0, limit, offset } }, 'orders');
 }
 
+/**
+ * Orders left open to any taker (pending, nobody assigned), oldest first.
+ * Takers only. They come without prices, like every taker list.
+ */
+export async function fetchOpenOrders({ search, limit = MAX_PAGE_SIZE, offset = 0, signal } = {}) {
+  const data = await api.get('/api/orders/open', { search, limit, offset }, { signal });
+  return parseOr(orderListSchema, data, { orders: [], pagination: { total: 0, limit, offset } }, 'openOrders');
+}
+
+/**
+ * Take an open order. First come, first served: if another taker got there
+ * first the server answers 409, which reaches the caller as an ApiError with
+ * status 409.
+ */
+export async function claimOrder(id) {
+  const data = await api.post(`/api/orders/${id}/claim`);
+  return parseOr(orderSchema, data, null, 'claimOrder');
+}
+
+/** An order nobody is assigned to yet, waiting for any taker to take it. */
+export const isOpenOrder = (order) =>
+  order?.status === 'pending' && (order.AssignedTakers || []).length === 0;
+
 /** Pages through everything for reports. Used sparingly - see README. */
 export async function fetchAllOrders({ role, status = 'all', signal, onProgress } = {}) {
   const all = [];

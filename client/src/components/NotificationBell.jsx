@@ -6,6 +6,7 @@ import { enablePush, pushSupported } from '../lib/push';
 import { useToast } from './Toast';
 import { T } from '../lib/labels';
 import { formatDateTime } from '../lib/format';
+import { notificationText } from '../lib/historyText';
 
 /**
  * Browser push is switched OFF. In real use it proved unreliable on the
@@ -137,7 +138,7 @@ export default function NotificationBell() {
                     n.isRead ? 'opacity-60' : 'bg-brand-50/60 dark:bg-indigo/10',
                   ].join(' ')}
                 >
-                  <p className="font-semibold">{n.message}</p>
+                  <p className="font-semibold">{notificationText(n.message)}</p>
                   <p className="mt-0.5 text-xs text-slate-500 dark:text-ink-400">
                     <span className="ltr">{formatDateTime(n.createdAt)}</span>
                   </p>

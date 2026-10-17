@@ -7,8 +7,9 @@ const USER_KEY = 'ama.user';
 
 /**
  * The JWT lives in localStorage, matching how the Flutter app uses
- * SharedPreferences. Worth knowing: the server issues 365-day tokens, so a
- * token lifted via XSS stays valid for a year. See the README security notes.
+ * SharedPreferences. Tokens last 365 days, but the server re-checks the account
+ * on every request: deactivating a user, or changing their password, ends
+ * their sessions within seconds (server/middleware/auth.js).
  */
 function readStoredUser() {
   try {
@@ -30,6 +31,12 @@ function decodeJwt(token) {
     return null;
   }
 }
+
+/** Flags that live only in this browser's copy of the user, not on the server. */
+const keepLocalFlags = (previous, next) => ({
+  ...next,
+  mustChangePassword: Boolean(previous?.mustChangePassword),
+});
 
 function applyTheme(prefersDark) {
   document.documentElement.classList.toggle('dark', Boolean(prefersDark));
@@ -77,7 +84,7 @@ export const useAuth = create((set, get) => ({
     // Then confirm against the server. A failure here is not a logout - the
     // server may just be briefly unreachable on the LAN.
     try {
-      const fresh = await authApi.me();
+      const fresh = keepLocalFlags(cached, await authApi.me());
       localStorage.setItem(USER_KEY, JSON.stringify(fresh));
       applyTheme(fresh.prefersDark);
       set({ user: fresh });
@@ -88,13 +95,28 @@ export const useAuth = create((set, get) => ({
 
   login: async (username, password) => {
     set({ error: null });
-    const { token, user } = await authApi.login(username, password);
+    const response = await authApi.login(username, password);
+    const { token } = response;
+    const user = { ...response.user, mustChangePassword: Boolean(response.mustChangePassword) };
     localStorage.setItem(TOKEN_KEY, token);
     localStorage.setItem(USER_KEY, JSON.stringify(user));
     setAuthToken(token);
     applyTheme(user.prefersDark);
     set({ token, user });
     return user;
+  },
+
+  /**
+   * The server ends every other session on a password change and hands back a
+   * new token for this one, so swap it in.
+   */
+  changePassword: async (currentPassword, newPassword) => {
+    const { token, user } = await authApi.changePassword(currentPassword, newPassword);
+    const next = { ...user, mustChangePassword: false };
+    localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(USER_KEY, JSON.stringify(next));
+    setAuthToken(token);
+    set({ token, user: next });
   },
 
   signup: async (username, password, role) => {
@@ -121,7 +143,7 @@ export const useAuth = create((set, get) => ({
     set({ user: optimistic });
 
     try {
-      const updated = await authApi.updateTheme(prefersDark);
+      const updated = keepLocalFlags(previous, await authApi.updateTheme(prefersDark));
       localStorage.setItem(USER_KEY, JSON.stringify(updated));
       applyTheme(updated.prefersDark);
       set({ user: updated });

@@ -39,15 +39,29 @@ function SendSheet({ open, onClose, onSend, count, busy }) {
   const { data: takers = [] } = useTakers(open);
   const { data: accounters = [] } = useAccounters(open);
   const [takerIds, setTakerIds] = useState([]);
+  const [openToAll, setOpenToAll] = useState(false);
   const [accounterId, setAccounterId] = useState('');
 
-  const canSend = takerIds.length > 0 && accounterId !== '';
+  const canSend = (openToAll || takerIds.length > 0) && accounterId !== '';
 
   return (
     <Modal open={open} onClose={onClose} title={`${T.sendOrders} (${count})`}>
       <div className="mb-4">
         <span className="label">{T.assignTakers}</span>
-        {takers.length === 0 ? (
+        <label className="mb-2 flex w-fit cursor-pointer items-center gap-2 text-sm font-bold">
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-amber-500"
+            checked={openToAll}
+            onChange={(e) => setOpenToAll(e.target.checked)}
+          />
+          {T.openToAll}
+        </label>
+        {openToAll ? (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-500/10 dark:text-amber-200">
+            {T.openToAllHint}
+          </p>
+        ) : takers.length === 0 ? (
           <p className="text-sm text-slate-500 dark:text-ink-400">—</p>
         ) : (
           <div className="flex flex-wrap gap-1.5">
@@ -105,7 +119,7 @@ function SendSheet({ open, onClose, onSend, count, busy }) {
           type="button"
           className="btn-primary"
           disabled={!canSend || busy}
-          onClick={() => onSend({ takerIds, accounterId: Number(accounterId) })}
+          onClick={() => onSend({ takerIds: openToAll ? [] : takerIds, openToAll, accounterId: Number(accounterId) })}
         >
           {busy ? <Spinner className="h-4 w-4" /> : null}
           {T.send}
@@ -164,11 +178,12 @@ export default function MakerArchived() {
     });
   };
 
-  const send = async ({ takerIds, accounterId }) => {
+  const send = async ({ takerIds, openToAll, accounterId }) => {
     setSending(true);
     try {
       // The server has no bulk status endpoint, so this is one PUT per order.
-      // Each order moving to pending sends its takers one Telegram message.
+      // Each order moving to pending sends its takers one Telegram message -
+      // or, sent out open, is offered to every linked taker.
       for (const order of selectedOrders) {
         await updateOrder.mutateAsync({
           id: order.id,
@@ -176,6 +191,7 @@ export default function MakerArchived() {
             status: 'pending',
             assignedTakerIds: takerIds,
             accounterId,
+            ...(openToAll ? { openToAll: true } : {}),
           },
         });
       }
@@ -193,7 +209,7 @@ export default function MakerArchived() {
     if (!deleting) return;
     try {
       await deleteOrder.mutateAsync(deleting.id);
-      toast.success(T.delete);
+      toast.success(T.deleted);
     } catch (err) {
       toast.error(err?.message || T.somethingWentWrong);
     } finally {

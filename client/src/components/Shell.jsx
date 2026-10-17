@@ -1,9 +1,11 @@
+import { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { useAuth } from '../store/auth';
 import { useToast } from './Toast';
 import NotificationBell from './NotificationBell';
+import ChangePasswordModal from './ChangePasswordModal';
 import { T, roleLabel } from '../lib/labels';
 
 function SunIcon() {
@@ -32,6 +34,15 @@ function RefreshIcon() {
   );
 }
 
+function KeyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
+      <circle cx="7.5" cy="15.5" r="4.5" />
+      <path d="m10.7 12.3 9.3-9.3M17 6l3 3M14 9l2 2" />
+    </svg>
+  );
+}
+
 function LogoutIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
@@ -46,6 +57,7 @@ export default function Shell() {
   const logout = useAuth((s) => s.logout);
   const setTheme = useAuth((s) => s.setTheme);
   const queryClient = useQueryClient();
+  const [changingPassword, setChangingPassword] = useState(false);
   const toast = useToast();
 
   const isDark = Boolean(user?.prefersDark);
@@ -99,6 +111,16 @@ export default function Shell() {
 
           <button
             type="button"
+            onClick={() => setChangingPassword(true)}
+            title={T.changePassword}
+            aria-label={T.changePassword}
+            className="btn-ghost p-2"
+          >
+            <KeyIcon />
+          </button>
+
+          <button
+            type="button"
             onClick={logout}
             title={T.logout}
             aria-label={T.logout}
@@ -109,9 +131,22 @@ export default function Shell() {
         </div>
       </header>
 
+      {user?.mustChangePassword && (
+        <div className="border-b border-red-200 bg-red-50 dark:border-red-500/30 dark:bg-red-500/10">
+          <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-3 px-4 py-2 text-sm text-red-800 dark:text-red-200">
+            <span className="flex-1 font-semibold">{T.defaultPasswordWarning}</span>
+            <button type="button" className="btn-danger text-xs" onClick={() => setChangingPassword(true)}>
+              {T.changeNow}
+            </button>
+          </div>
+        </div>
+      )}
+
       <main className="mx-auto max-w-[1400px] px-4 py-4">
         <Outlet />
       </main>
+
+      {changingPassword && <ChangePasswordModal onClose={() => setChangingPassword(false)} />}
     </div>
   );
 }

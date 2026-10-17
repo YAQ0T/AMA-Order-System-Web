@@ -55,7 +55,7 @@ export default function MakerActive() {
       } else {
         await updateOrder.mutateAsync({ id: order.id, payload: { status: nextStatus } });
       }
-      toast.success(T.save);
+      toast.success(T.saved);
     } catch (err) {
       toast.error(err?.message || T.somethingWentWrong);
     }
@@ -65,7 +65,7 @@ export default function MakerActive() {
     if (!deleting) return;
     try {
       await deleteOrder.mutateAsync(deleting.id);
-      toast.success(T.delete);
+      toast.success(T.deleted);
     } catch (err) {
       toast.error(err?.message || T.somethingWentWrong);
     } finally {

@@ -4,6 +4,7 @@ const { OrderItem, sequelize } = require('../db');
 const { Op } = require('sequelize');
 const { authenticateToken } = require('../middleware/auth');
 const { setItemStatus, HttpError } = require('./order_items');
+const { escapeLike } = require('./order_helpers');
 
 // GET /api/items/suggestions?q=query
 router.get('/suggestions', authenticateToken, async (req, res) => {
@@ -13,7 +14,7 @@ router.get('/suggestions', authenticateToken, async (req, res) => {
 
         if (q) {
             whereClause.name = {
-                [Op.like]: `%${q}%`
+                [Op.like]: `%${escapeLike(q)}%`
             };
         }
 

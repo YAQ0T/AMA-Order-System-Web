@@ -64,13 +64,15 @@ module.exports = (sequelize) => {
         ]
     });
 
+    // Only hashes on create. Code that changes a password hashes it itself
+    // (routes/auth.js, routes/admin.js).
+    //
+    // There used to be an "auto-approve admins" rule here too. Combined with a
+    // sign-up form that accepted any role, it let anyone make themselves an
+    // admin. The only admin is now the one seedAdmin creates, approved there.
     User.beforeCreate(async (user) => {
         if (user.password) {
             user.password = await bcrypt.hash(user.password, 10);
-        }
-        // Auto-approve admin users
-        if (user.role === 'admin') {
-            user.isApproved = true;
         }
     });
 

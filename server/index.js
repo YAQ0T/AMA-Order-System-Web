@@ -47,16 +47,42 @@ const findAvailablePort = async (preferredPort, attempts = 10) => {
     throw new Error(`Port ${preferredPort} is not available. Please stop the process using it or set PORT env.`);
 };
 
-// Middleware: allow all origins (mobile/web clients on LAN)
+// Middleware: allow all origins (mobile/web clients on LAN). Logins travel in
+// an Authorization header, never a cookie, so this does not open the door to
+// cross-site request forgery.
 app.use(cors({
     origin: true,
     credentials: true
 }));
 app.use(express.json());
 
+// Basic browser hardening: no MIME sniffing, the app cannot be framed by
+// another site (clickjacking), and URLs are not leaked to other sites.
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+    res.set({
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY',
+        'Referrer-Policy': 'same-origin'
+    });
+    next();
+});
+
+// A stray rejected promise (a Telegram call, a log write) must not take the
+// whole system down: Node's default for an unhandled rejection is to exit.
+// "Start AMA" does not restart a crashed server, so log it and carry on.
+process.on('unhandledRejection', (reason) => {
+    console.error('[unhandled rejection]', reason instanceof Error ? reason.stack : reason);
+});
+
 // Certificate Authentication Middleware - DISABLED
 // const { validateClientCertificate } = require('./middleware/certificateAuth');
 // app.use(validateClientCertificate);
+
+// Whether the database is usable yet. Reported by /api/health so the
+// launcher (scripts/launch.js) can tell "running" from "running, but MySQL is
+// down". Only a short code is exposed - the details are in the server log.
+const dbState = { state: 'starting', code: null };
 
 // Sync Database and seed admin
 const syncDatabase = async () => {
@@ -76,7 +102,9 @@ const syncDatabase = async () => {
         const advice = {
             ECONNREFUSED: [
                 `Nothing is accepting connections on ${host}:${port}.`,
-                '  - Is the MySQL service running? (services.msc on Windows)',
+                process.platform === 'darwin'
+                    ? '  - Is MySQL running? (System Settings > MySQL, or: brew services start mysql)'
+                    : '  - Is the MySQL service running? (Win+R > services.msc > MySQL > Start)',
                 '  - Is DB_PORT right? MySQL uses 3306; 3307 is common when two are installed.',
             ],
             ER_ACCESS_DENIED_ERROR: [
@@ -96,6 +124,8 @@ const syncDatabase = async () => {
             ETIMEDOUT: [`Timed out reaching ${host}:${port}. A firewall is the usual cause.`],
         }[code];
 
+        dbState.state = 'error';
+        dbState.code = code || 'UNKNOWN';
         console.error('\n  Cannot connect to the database.');
         console.error(`  ${code || 'Unknown error'}${error.original?.message ? ': ' + error.original.message : ''}\n`);
 
@@ -118,6 +148,8 @@ const syncDatabase = async () => {
         console.log('Database synced');
     } catch (error) {
         console.error('Failed to create tables:', error);
+        dbState.state = 'error';
+        dbState.code = 'SYNC_FAILED';
         return;
     }
 
@@ -172,12 +204,21 @@ const syncDatabase = async () => {
         console.error('Failed to seed admin user:', error.message);
     }
 
+    dbState.state = 'ready';
+
     // 6) Telegram bot. Started only once the database is ready, because it
     //    writes link records as soon as a taker taps Start.
     telegram.start();
+
+    // 7) Automatic backups (utils/backup.js). Also needs the database.
+    backup.startAutoBackup();
+
+    // 8) Delete old order event log files (utils/orderRequestLogger.js).
+    require('./utils/orderRequestLogger').startOrderLogPruning();
 };
 
 const telegram = require('./utils/telegram');
+const backup = require('./utils/backup');
 
 syncDatabase();
 
@@ -186,6 +227,7 @@ syncDatabase();
 for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => {
         telegram.stop();
+        backup.stopAutoBackup();
         process.exit(0);
     });
 }
@@ -208,13 +250,14 @@ app.use('/api/orders', orderTakerRoutes);
 app.use('/api/orders', orderAdminRoutes);
 app.use('/api/orders', orderAccounterRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/admin/backups', require('./routes/backups'));
 app.use('/api/admin', adminRoutes);
 app.use('/api/items', require('./routes/items'));
 app.use('/api/telegram', require('./routes/telegram'));
 
 // Health check (handy for checking the API is reachable from a browser/LAN device)
 app.get('/api/health', (req, res) => {
-    res.json({ ok: true, time: new Date().toISOString() });
+    res.json({ ok: true, time: new Date().toISOString(), db: dbState.state, dbCode: dbState.code });
 });
 
 // Serve the built React client from client/dist when it has been built.

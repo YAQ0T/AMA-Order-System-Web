@@ -137,6 +137,8 @@ export const statsSchema = z.object({
 export const authResponseSchema = z.object({
   token: z.string(),
   user: userSchema,
+  // Login only: the admin signed in with the seeded default password.
+  mustChangePassword: z.boolean().optional(),
 });
 
 /**

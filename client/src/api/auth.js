@@ -16,6 +16,12 @@ export async function me() {
   return userSchema.parse(data.user);
 }
 
+/** Change your own password. Resolves to a fresh { token, user }: the old token stops working. */
+export async function changePassword(currentPassword, newPassword) {
+  const data = await api.put('/api/auth/password', { currentPassword, newPassword });
+  return authResponseSchema.parse(data);
+}
+
 export async function updateTheme(prefersDark) {
   const data = await api.put('/api/auth/theme', { prefersDark });
   return userSchema.parse(data.user);

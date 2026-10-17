@@ -20,5 +20,15 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
+    // One ~500 KB bundle (150 KB gzipped) is fine for an app served on the
+    // LAN, so do not warn about it on every start.
+    chunkSizeWarningLimit: 1024,
+    rollupOptions: {
+      onwarn(warning, warn) {
+        // zod ships /* @__PURE__ */ comments Rollup cannot place; harmless.
+        if (warning.code === 'INVALID_ANNOTATION') return;
+        warn(warning);
+      },
+    },
   },
 });

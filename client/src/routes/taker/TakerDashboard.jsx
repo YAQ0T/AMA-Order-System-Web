@@ -1,11 +1,18 @@
 import { useState } from 'react';
+import { Link, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 
 import OrderFilters from '../../components/OrderFilters';
 import OrderTable from '../../components/OrderTable';
 import Pagination from '../../components/Pagination';
-import { ConfirmDialog, ErrorState, Modal, Spinner } from '../../components/ui';
+import { ConfirmDialog, ErrorState, Ltr, Modal, Spinner, TabLinks } from '../../components/ui';
 import { useToast } from '../../components/Toast';
-import { useOrdersQuery, useUpdateOrder, useUpdateItemStatus } from '../../hooks/useOrders';
+import {
+  useOrdersQuery,
+  useUpdateOrder,
+  useUpdateItemStatus,
+  useOpenOrdersQuery,
+  useClaimOrder,
+} from '../../hooks/useOrders';
 import * as ordersApi from '../../api/orders';
 import { T } from '../../lib/labels';
 import { parseNumber, formatQuantity } from '../../lib/format';
@@ -56,7 +63,7 @@ function AddItemModal({ order, open, onClose }) {
           ],
         },
       });
-      toast.success(T.addItem);
+      toast.success(T.itemAdded);
       setName('');
       setQuantity('1');
       onClose();
@@ -74,7 +81,7 @@ function AddItemModal({ order, open, onClose }) {
           <label className="label" htmlFor="add-item-name">
             {T.itemName}
           </label>
-          <ItemNameInput id="add-item-name" value={name} onChange={setName} />
+          <ItemNameInput id="add-item-name" value={name} onChange={setName} maxLength={255} />
         </div>
         <div>
           <label className="label" htmlFor="add-item-qty">
@@ -137,7 +144,7 @@ function EditItemModal({ order, item, open, onClose }) {
           ),
         },
       });
-      toast.success(T.save);
+      toast.success(T.saved);
       onClose();
     } catch (err) {
       setError(err?.message || T.somethingWentWrong);
@@ -176,7 +183,8 @@ function EditItemModal({ order, item, open, onClose }) {
   );
 }
 
-export default function TakerDashboard() {
+/** The taker's own orders: assigned to them, or taken from the open list. */
+function TakerMyOrders({ openCount }) {
   const toast = useToast();
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('active');
@@ -192,6 +200,8 @@ export default function TakerDashboard() {
     search,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
+    // New assignments show up without a reload.
+    refetchInterval: 30_000,
   });
 
   const updateOrder = useUpdateOrder();
@@ -223,7 +233,7 @@ export default function TakerDashboard() {
 
     try {
       await updateOrder.mutateAsync({ id: advancing.id, payload: { status: next } });
-      toast.success(T.save);
+      toast.success(T.saved);
     } catch (err) {
       toast.error(err?.message || T.somethingWentWrong);
     } finally {
@@ -235,8 +245,6 @@ export default function TakerDashboard() {
 
   return (
     <div>
-      <TelegramLinkCard />
-
       <OrderFilters
         status={status}
         onStatusChange={(value) => {
@@ -264,6 +272,16 @@ export default function TakerDashboard() {
            always render empty. */
         showPrices={false}
         showHistory={false}
+        emptyMessage={
+          openCount > 0 && !search ? (
+            <>
+              {T.noOrders}.{' '}
+              <Link to="/taker/open" className="font-bold text-brand-600 hover:underline dark:text-indigo">
+                {T.openOrders} (<Ltr>{openCount}</Ltr>)
+              </Link>
+            </>
+          ) : undefined
+        }
         onItemStatus={onItemStatus}
         busyItems={busyItems}
         onItemEdit={(order, item) => setEditingItem({ order, item })}
@@ -307,6 +325,130 @@ export default function TakerDashboard() {
         onConfirm={advance}
         onCancel={() => setAdvancing(null)}
       />
+    </div>
+  );
+}
+
+/**
+ * Orders left open to any taker. Taking one is first come, first served: the
+ * server locks the order, so if two takers tap at once exactly one gets it and
+ * the other is told someone beat them to it.
+ */
+function TakerOpenOrders() {
+  const toast = useToast();
+  const navigate = useNavigate();
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(0);
+  const [claiming, setClaiming] = useState(null);
+
+  const query = useOpenOrdersQuery({ search, limit: PAGE_SIZE, offset: page * PAGE_SIZE });
+  const claim = useClaimOrder();
+
+  const orders = query.data?.orders ?? [];
+  const total = query.data?.pagination?.total ?? 0;
+
+  const confirmClaim = async () => {
+    const order = claiming;
+    if (!order || claim.isPending) return;
+    try {
+      await claim.mutateAsync(order.id);
+      toast.success(T.orderTaken);
+      navigate('/taker/mine');
+    } catch (err) {
+      toast.error(err?.status === 409 ? T.orderAlreadyTaken : err?.message || T.somethingWentWrong);
+    } finally {
+      setClaiming(null);
+    }
+  };
+
+  if (query.isError) return <ErrorState error={query.error} onRetry={query.refetch} />;
+
+  return (
+    <div>
+      <p className="mb-3 text-sm text-slate-600 dark:text-ink-400">{T.openOrdersHint}</p>
+
+      <OrderFilters
+        statusEnabled={false}
+        search={search}
+        onSearchChange={(value) => {
+          setSearch(value);
+          setPage(0);
+        }}
+      />
+
+      {query.isFetching && (
+        <div className="mb-2 flex justify-center">
+          <Spinner className="h-5 w-5 text-brand-500" />
+        </div>
+      )}
+
+      <OrderTable
+        orders={orders}
+        showPrices={false}
+        showHistory={false}
+        emptyMessage={T.noOpenOrders}
+        extraActions={(order) => (
+          <button
+            type="button"
+            className="btn-primary text-xs"
+            disabled={claim.isPending}
+            onClick={() => setClaiming(order)}
+          >
+            {T.takeOrder}
+          </button>
+        )}
+      />
+
+      <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
+
+      <ConfirmDialog
+        open={Boolean(claiming)}
+        title={T.takeOrder}
+        message={claiming ? T.takeOrderConfirm(claiming.id) : ''}
+        confirmLabel={T.takeOrder}
+        tone="primary"
+        onConfirm={confirmClaim}
+        onCancel={() => setClaiming(null)}
+      />
+    </div>
+  );
+}
+
+export default function TakerDashboard() {
+  // Same query (and cache entry) as the open tab's first page, so the badge
+  // costs nothing extra and stays in step with the list.
+  const open = useOpenOrdersQuery({ limit: PAGE_SIZE, offset: 0 });
+  const openCount = open.data?.pagination?.total ?? 0;
+
+  return (
+    <div>
+      <TelegramLinkCard />
+
+      <TabLinks
+        tabs={[
+          { to: '/taker/mine', label: T.myOrders },
+          {
+            to: '/taker/open',
+            label: (
+              <span className="inline-flex items-center gap-1.5">
+                {T.openOrders}
+                {openCount > 0 && (
+                  <span className="rounded-full bg-amber-500 px-2 text-xs leading-5 text-white">
+                    <Ltr>{openCount}</Ltr>
+                  </span>
+                )}
+              </span>
+            ),
+          },
+        ]}
+      />
+
+      <Routes>
+        <Route index element={<Navigate to="mine" replace />} />
+        <Route path="mine" element={<TakerMyOrders openCount={openCount} />} />
+        <Route path="open" element={<TakerOpenOrders />} />
+        <Route path="*" element={<Navigate to="mine" replace />} />
+      </Routes>
     </div>
   );
 }

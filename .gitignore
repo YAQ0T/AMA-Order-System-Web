@@ -12,3 +12,12 @@ dist/
 # usernames and IP addresses, so they must never be committed.
 logs/
 *.jsonl
+
+# Database backups (server/utils/backup.js). They hold every row, password
+# hashes included - never commit them.
+backups/
+*.sql.gz
+*.sql.gz.partial
+
+# Runtime state of the one-click launcher (scripts/launch.js): pid + server log.
+.ama_runtime/

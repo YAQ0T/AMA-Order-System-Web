@@ -28,6 +28,9 @@ export default function OrderForm() {
   const [city, setCity] = useState(DEFAULT_CITY);
   const [items, setItems] = useState([emptyItem()]);
   const [takerIds, setTakerIds] = useState([]);
+  // Left for any taker instead of assigned. Not cleared by reset(): it is a
+  // way of working, and a maker who uses it will want it for the next order too.
+  const [openToAll, setOpenToAll] = useState(false);
   const [accounterId, setAccounterId] = useState('');
   const [errors, setErrors] = useState({});
 
@@ -116,9 +119,10 @@ export default function OrderForm() {
     if (cleaned.length === 0) next.items = T.atLeastOneItem;
 
     // Archived orders are drafts - no assignment required yet. Active orders
-    // need both, and the server rejects them otherwise (routes/orders.js).
+    // need an accountant and a taker (or to be open to any taker), and the
+    // server rejects them otherwise (routes/orders.js).
     if (!archive) {
-      if (takerIds.length === 0) next.takers = T.needTaker;
+      if (!openToAll && takerIds.length === 0) next.takers = T.needTaker;
       if (!accounterId) next.accounter = T.needAccounter;
     }
 
@@ -131,7 +135,7 @@ export default function OrderForm() {
 
     const { valid, cleaned } = validate(archive);
     if (!valid) {
-      toast.error(T.somethingWentWrong);
+      toast.error(T.fixErrors);
       return;
     }
 
@@ -141,9 +145,10 @@ export default function OrderForm() {
         description: description.trim() || null,
         city: city.trim(),
         items: cleaned,
-        assignedTakerIds: archive ? [] : takerIds,
+        assignedTakerIds: archive || openToAll ? [] : takerIds,
         accounterId: archive ? null : Number(accounterId),
         ...(archive ? { status: 'archived' } : {}),
+        ...(!archive && openToAll ? { openToAll: true } : {}),
       });
 
       cleaned.forEach((item) => sessionProductNames.add(item.name));
@@ -190,6 +195,7 @@ export default function OrderForm() {
             id="order-title"
             name="title"
             className="input"
+            maxLength={255}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             autoComplete="off"
@@ -224,6 +230,7 @@ export default function OrderForm() {
         <textarea
           id="order-description"
           className="input"
+          maxLength={5000}
           rows={2}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
@@ -253,6 +260,7 @@ export default function OrderForm() {
                   onAccept={() => focusItem(item.key, 'quantity')}
                   onEnter={() => focusItem(item.key, 'quantity')}
                   localNames={[...sessionProductNames]}
+                  maxLength={255}
                   placeholder={`${T.itemName} ${index + 1}`}
                   aria-label={`${T.itemName} ${index + 1}`}
                 />
@@ -340,7 +348,23 @@ export default function OrderForm() {
       <div className="mb-4 grid gap-4 sm:grid-cols-2">
         <div>
           <span className="label">{T.assignTakers}</span>
-          {takersLoading ? (
+          <label className="mb-2 flex w-fit cursor-pointer items-center gap-2 text-sm font-bold">
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-amber-500"
+              checked={openToAll}
+              onChange={(e) => {
+                setOpenToAll(e.target.checked);
+                setErrors((current) => ({ ...current, takers: undefined }));
+              }}
+            />
+            {T.openToAll}
+          </label>
+          {openToAll ? (
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-500/10 dark:text-amber-200">
+              {T.openToAllHint}
+            </p>
+          ) : takersLoading ? (
             <Spinner className="h-4 w-4" />
           ) : takers.length === 0 ? (
             <p className="text-sm text-slate-500 dark:text-ink-400">—</p>

@@ -9,7 +9,9 @@
     "db:check": "node check-db.js",
     "db:create": "node create-db.js",
     "dev:alt-port": "cross-env PORT=3004 nodemon index.js",
-    "test:integration": "node test/run-integration.js"
+    "test:integration": "node test/run-integration.js",
+    "db:restore": "node restore-db.js",
+    "db:backup": "node backup-db.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -7,3 +7,4 @@
 # Binary assets - never touch their bytes.
 *.png binary
 *.ttf binary
+*.command text eol=lf

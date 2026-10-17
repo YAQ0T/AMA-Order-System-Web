@@ -4,6 +4,7 @@ import { T, CITIES } from '../lib/labels';
 import { parseNumber, formatQuantity } from '../lib/format';
 import { useTakers, useAccounters } from '../hooks/useUsers';
 import { useUpdateOrder } from '../hooks/useOrders';
+import { isOpenOrder } from '../api/orders';
 import { useToast } from './Toast';
 import { Modal, Spinner } from './ui';
 import ItemNameInput from './ItemNameInput';
@@ -43,12 +44,17 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
   const [city, setCity] = useState(order?.city || '');
   const [rows, setRows] = useState(() => (order?.Items || []).map(toRow));
   const [takerIds, setTakerIds] = useState(() => (order?.AssignedTakers || []).map((t) => t.id));
+  const [openToAll, setOpenToAll] = useState(() => isOpenOrder(order));
   const [accounterId, setAccounterId] = useState(
     order?.accounterId ? String(order.accounterId) : order?.Accounter?.id ? String(order.Accounter.id) : ''
   );
   const [error, setError] = useState(null);
 
   if (!order) return null;
+
+  // "Open to any taker" only means something for an order that is live for
+  // takers. An archived order gets its takers when it is sent out.
+  const isActive = order.status === 'pending' || order.status === 'in-progress';
 
   const updateRow = (key, patch) =>
     setRows((current) => current.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -111,13 +117,22 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
     };
 
     if (canAssign) {
-      payload.assignedTakerIds = takerIds;
+      if (isActive && openToAll) {
+        payload.openToAll = true;
+        payload.assignedTakerIds = [];
+      } else {
+        if (isActive && takerIds.length === 0) {
+          setError(T.needTaker);
+          return;
+        }
+        payload.assignedTakerIds = takerIds;
+      }
       payload.accounterId = accounterId ? Number(accounterId) : null;
     }
 
     try {
       await updateOrder.mutateAsync({ id: order.id, payload });
-      toast.success(T.save);
+      toast.success(T.saved);
       onClose();
     } catch (err) {
       setError(err?.message || T.somethingWentWrong);
@@ -135,6 +150,7 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
             <input
               id="edit-title"
               className="input"
+              maxLength={255}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
@@ -161,6 +177,7 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
           <textarea
             id="edit-description"
             className="input"
+            maxLength={5000}
             rows={2}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
@@ -179,6 +196,7 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
                   value={row.name}
                   onChange={(name) => updateRow(row.key, { name })}
                   aria-label={T.itemName}
+                  maxLength={255}
                 />
                 <input
                   className="input text-center"
@@ -223,31 +241,50 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <span className="label">{T.assignTakers}</span>
-              <div className="flex flex-wrap gap-1.5">
-                {takers.map((taker) => {
-                  const selected = takerIds.includes(taker.id);
-                  return (
-                    <button
-                      key={taker.id}
-                      type="button"
-                      aria-pressed={selected}
-                      onClick={() =>
-                        setTakerIds((c) =>
-                          c.includes(taker.id) ? c.filter((t) => t !== taker.id) : [...c, taker.id]
-                        )
-                      }
-                      className={[
-                        'rounded-lg border px-3 py-1.5 text-sm font-bold transition',
-                        selected
-                          ? 'border-brand-500 bg-brand-500 text-white dark:border-indigo dark:bg-indigo'
-                          : 'border-slate-300 bg-white text-slate-700 dark:border-slate-600 dark:bg-ink-900 dark:text-ink-50',
-                      ].join(' ')}
-                    >
-                      {taker.username}
-                    </button>
-                  );
-                })}
-              </div>
+              {isActive && (
+                <label className="mb-2 flex w-fit cursor-pointer items-center gap-2 text-sm font-bold">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-amber-500"
+                    checked={openToAll}
+                    onChange={(e) => setOpenToAll(e.target.checked)}
+                  />
+                  {T.openToAll}
+                </label>
+              )}
+              {isActive && openToAll ? (
+                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-500/10 dark:text-amber-200">
+                  {order.status === 'in-progress' && order.AssignedTakers?.length
+                    ? T.openToAllReleaseHint
+                    : T.openToAllHint}
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {takers.map((taker) => {
+                    const selected = takerIds.includes(taker.id);
+                    return (
+                      <button
+                        key={taker.id}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() =>
+                          setTakerIds((c) =>
+                            c.includes(taker.id) ? c.filter((t) => t !== taker.id) : [...c, taker.id]
+                          )
+                        }
+                        className={[
+                          'rounded-lg border px-3 py-1.5 text-sm font-bold transition',
+                          selected
+                            ? 'border-brand-500 bg-brand-500 text-white dark:border-indigo dark:bg-indigo'
+                            : 'border-slate-300 bg-white text-slate-700 dark:border-slate-600 dark:bg-ink-900 dark:text-ink-50',
+                        ].join(' ')}
+                      >
+                        {taker.username}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             <div>

@@ -18,6 +18,8 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const net = require('net');
 const { spawn } = require('child_process');
 const mysql = require('mysql2/promise');
@@ -32,9 +34,15 @@ const SUITES = [
   { file: 'api.test.mjs' },
   { file: 'concurrency.test.mjs' },
   { file: 'telegram.test.mjs', telegram: true },
+  { file: 'open-orders.test.mjs', telegram: true },
+  { file: 'backup.test.mjs' },
+  { file: 'security.test.mjs' },
 ];
 const REAL_DB = process.env.DB_NAME;
 const TEST_DB = `${REAL_DB}_test`;
+// Test servers write their backups here, never into the real backups folder,
+// and the folder is deleted at the end.
+const TEST_BACKUP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ama-test-backups-'));
 
 function fail(message) {
   console.error(`\n  ${message}\n`);
@@ -90,6 +98,13 @@ async function startServer(port, extraEnv = {}) {
       // Never let a test server talk to real outside services.
       TELEGRAM_BOT_TOKEN: '',
       TELEGRAM_API_BASE: '',
+      // ...or touch the real backups: no automatic backups, and any backup a
+      // test asks for goes to a throwaway folder.
+      BACKUP_AUTO: 'off',
+      BACKUP_DIR: TEST_BACKUP_DIR,
+      BACKUP_COPY_DIR: '',
+      // ...or write test orders into the real order event log.
+      ORDER_LOG_DIR: path.join(TEST_BACKUP_DIR, 'logs'),
       ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -123,7 +138,12 @@ async function startServer(port, extraEnv = {}) {
 
 function runSuite(file, args) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [path.join(__dirname, file), ...args], { stdio: 'inherit' });
+    const child = spawn(process.execPath, [path.join(__dirname, file), ...args], {
+      stdio: 'inherit',
+      // The backup suite runs the restore tool itself, against the test
+      // database only - it is told which one here.
+      env: { ...process.env, AMA_TEST_DB: TEST_DB, AMA_TEST_BACKUP_DIR: TEST_BACKUP_DIR },
+    });
     child.on('exit', (code) => resolve(code === 0));
   });
 }
@@ -166,6 +186,7 @@ async function main() {
     }
   } finally {
     await dropDatabase();
+    fs.rmSync(TEST_BACKUP_DIR, { recursive: true, force: true });
   }
 
   console.log('Summary');

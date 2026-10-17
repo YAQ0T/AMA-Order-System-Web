@@ -45,7 +45,7 @@ export default function AdminOrders() {
   const onStatusChange = async (order, nextStatus) => {
     try {
       await updateOrder.mutateAsync({ id: order.id, payload: { status: nextStatus } });
-      toast.success(T.save);
+      toast.success(T.saved);
     } catch (err) {
       toast.error(err?.message || T.somethingWentWrong);
     }
@@ -55,7 +55,7 @@ export default function AdminOrders() {
     if (!deleting) return;
     try {
       await deleteOrder.mutateAsync(deleting.id);
-      toast.success(T.delete);
+      toast.success(T.deleted);
     } catch (err) {
       toast.error(err?.message || T.somethingWentWrong);
     } finally {
