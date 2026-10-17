@@ -187,6 +187,7 @@ const adminRoutes = require('./routes/admin');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/orders', orderRoutes);
+app.use('/api/orders', require('./routes/order_items').router);
 app.use('/api/orders', orderMakerRoutes);
 app.use('/api/orders', orderTakerRoutes);
 app.use('/api/orders', orderAdminRoutes);

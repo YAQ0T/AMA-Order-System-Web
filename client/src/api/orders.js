@@ -112,30 +112,39 @@ export async function suggestTitles(q, signal) {
   return parseOr(suggestionSchema, data, [], 'titleSuggestions');
 }
 
-export async function updateItemStatus(itemId, status) {
-  return api.patch(`/api/items/${itemId}/status`, { status });
+/**
+ * Set ONE item's status. The server updates that single row, so two takers
+ * ticking different items in the same order cannot undo each other.
+ * Items are addressed by name: ids rotate whenever the order is saved via PUT.
+ */
+export async function setItemStatus(orderId, name, status) {
+  const data = await api.patch(`/api/orders/${orderId}/items/status`, { name, status: status ?? null });
+  return parseOr(orderSchema, data, null, 'setItemStatus');
 }
 
 /**
- * Build the `items` array the PUT /api/orders/:id endpoint expects.
+ * Build the `items` array for PUT /api/orders/:id - used for STRUCTURAL edits
+ * (adding, removing, re-quantifying or re-pricing items).
  *
- * Always send the FULL item list with every field present: the server rebuilds
- * the order's items from exactly what arrives, and it distinguishes a missing
- * `status` key from an explicit null (statusProvidedByName in routes/orders.js).
- * Omit an item here and it is deleted.
+ * Send the FULL list: the server rebuilds the order's items from exactly what
+ * arrives, so an item missing here is deleted.
  *
- * `id` is deliberately NOT sent. The server drops it anyway (sanitizeItems
- * returns only name/quantity/price/status) and matches rows by name. It is used
- * for one thing - restoring prices on a taker's write - and that lookup already
- * falls back to name. Since every save rotates item ids via destroy +
- * bulkCreate, a client-held id is routinely stale, so sending it can only
- * mislead.
+ * `status` is deliberately NOT sent. When the key is absent the server keeps
+ * each item's current status, read after it locks the order row
+ * (statusProvidedByName in routes/orders.js). That matters because a taker may
+ * have ticked an item while this edit was being prepared; sending our copy of
+ * the statuses would silently overwrite their tick. Status changes go through
+ * setItemStatus instead. (OrderEditModal is the one exception: a RENAMED item is
+ * new to the server, so it carries its status across explicitly.)
+ *
+ * `id` is deliberately NOT sent either. The server drops it (sanitizeItems
+ * keeps only name/quantity/price/status) and every PUT rotates ids anyway, so a
+ * client-held id is routinely stale.
  */
 export function itemsPayload(items) {
   return (items || []).map((item) => ({
     name: item.name,
     quantity: item.quantity,
     price: item.price ?? null,
-    status: item.status ?? null,
   }));
 }

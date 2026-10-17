@@ -20,6 +20,7 @@ const ACTION_LABELS = {
   order_updated: 'تعديل طلب',
   order_deleted: 'حذف طلب',
   order_status_changed: 'تغيير حالة الطلب',
+  order_item_status_changed: 'تغيير حالة صنف',
 };
 
 export const actionLabel = (action) =>

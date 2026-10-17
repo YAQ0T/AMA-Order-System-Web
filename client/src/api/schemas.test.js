@@ -73,12 +73,18 @@ describe('itemsPayload', () => {
     expect(payload[0]).not.toHaveProperty('id');
   });
 
-  it('always sends an explicit status key, including null', () => {
-    // The server distinguishes a missing `status` key from an explicit null
-    // (statusProvidedByName), so the key must always be present.
-    const payload = itemsPayload([{ name: 'طحينة', quantity: 1 }]);
-    expect(Object.keys(payload[0])).toContain('status');
-    expect(payload[0].status).toBeNull();
+  // Regression guard for "two takers wipe each other's ticks". A structural
+  // edit (add item, change quantity) must NOT carry statuses: with the key
+  // absent the server keeps each item's live status, so a tick another taker
+  // made in the meantime survives. Sending our copy would overwrite it.
+  it('never sends status, so the server keeps the live value', () => {
+    const payload = itemsPayload([
+      { name: 'a', quantity: 1, status: 'collected' },
+      { name: 'b', quantity: 2, status: null },
+    ]);
+    for (const item of payload) {
+      expect(item).not.toHaveProperty('status');
+    }
   });
 
   it('sends null rather than undefined for a missing price', () => {
@@ -87,12 +93,12 @@ describe('itemsPayload', () => {
 
   it('preserves every item, since omitting one deletes it server-side', () => {
     const items = [
-      { name: 'a', quantity: 1, status: 'collected' },
-      { name: 'b', quantity: 2, status: null },
-      { name: 'c', quantity: 3, status: 'unavailable' },
+      { name: 'a', quantity: 1 },
+      { name: 'b', quantity: 2.5 },
+      { name: 'c', quantity: 3 },
     ];
     const payload = itemsPayload(items);
     expect(payload).toHaveLength(3);
-    expect(payload.map((i) => i.status)).toEqual(['collected', null, 'unavailable']);
+    expect(payload.map((i) => [i.name, i.quantity])).toEqual([['a', 1], ['b', 2.5], ['c', 3]]);
   });
 });

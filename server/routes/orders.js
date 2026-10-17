@@ -872,8 +872,12 @@ router.put('/:id', authenticateToken, async (req, res) => {
                 });
             }
 
-            // If Taker updated, notify Maker
-            if (req.user.role === 'taker' && updatedOrder.Maker) {
+            // If a Taker changed the ORDER status (started / finished it), email
+            // the Maker. Only then: item ticks used to come through here too,
+            // which emailed the maker once per item. Ticks now use
+            // PATCH /api/orders/:id/items/status, and a taker adding an item or
+            // editing a quantity still raises an in-app notification above.
+            if (req.user.role === 'taker' && updatedOrder.Maker && changeSummary.includes('status')) {
                 sendOrderUpdatedByTakerEmail(updatedOrder, updatedOrder.Maker, editor, recentChanges).catch(err => {
                     console.error('Error sending order updated email to maker:', err);
                 });

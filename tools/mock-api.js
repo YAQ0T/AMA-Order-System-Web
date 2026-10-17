@@ -352,6 +352,10 @@ const server = http.createServer(async (req, res) => {
         const priceByName = new Map(
           (order.Items || []).map((i) => [String(i.name).toLowerCase(), i.price ?? null])
         );
+        // Like the real server: when an item arrives WITHOUT a `status` key,
+        // keep the status it already has. The client omits status on
+        // structural edits so a tick made meanwhile is not overwritten.
+        const statusByName = new Map((order.Items || []).map((i) => [i.name, i.status ?? null]));
         const isTaker = user.role === 'taker';
 
         order.Items = body.items.map((item) => {
@@ -361,12 +365,15 @@ const server = http.createServer(async (req, res) => {
             : item.price == null
               ? null
               : Number(item.price).toFixed(2);
+          const status = Object.prototype.hasOwnProperty.call(item, 'status')
+            ? item.status ?? null
+            : statusByName.get(item.name) ?? null;
           return {
             id: nextItemId++,
             name: item.name,
             quantity: Number(item.quantity),
             price,
-            status: item.status ?? null,
+            status,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           };
@@ -375,6 +382,39 @@ const server = http.createServer(async (req, res) => {
       order.updatedAt = new Date().toISOString();
       return send(200, forRole(order, user.role));
     }
+  }
+
+  // Single-item status change: mirrors PATCH /api/orders/:id/items/status.
+  // Updates one row and does NOT rotate ids (unlike PUT), with the same
+  // authorization rule as the real server.
+  const itemStatusMatch = pathname.match(/^\/api\/orders\/(\d+)\/items\/status$/);
+  if (itemStatusMatch && req.method === 'PATCH') {
+    if (needsAuth()) return undefined;
+    const order = orders.find((o) => o.id === Number(itemStatusMatch[1]));
+    if (!order) return send(404, { error: 'Order not found' });
+
+    const allowed =
+      user.role === 'admin' ||
+      order.makerId === user.id ||
+      order.AssignedTakers.some((t) => t.id === user.id);
+    if (!allowed) return send(403, { error: 'Not authorized to edit this order' });
+    if (user.role === 'taker' && ['completed', 'entered_erp'].includes(order.status)) {
+      return send(409, { error: `Order is ${order.status} and can no longer be changed` });
+    }
+
+    const body = await readBody();
+    if (!Object.prototype.hasOwnProperty.call(body, 'status')) {
+      return send(400, { error: 'status is required (use null to clear it)' });
+    }
+    if (![null, 'collected', 'unavailable'].includes(body.status)) {
+      return send(400, { error: 'Invalid status value' });
+    }
+    const item = order.Items.find((i) => i.name === body.name);
+    if (!item) return send(404, { error: `Item "${body.name}" not found in this order` });
+
+    item.status = body.status;
+    item.updatedAt = new Date().toISOString();
+    return send(200, forRole(order, user.role));
   }
 
   // ---- items ----

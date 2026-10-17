@@ -84,27 +84,21 @@ function updateCachedOrder(queryClient, orderId, updater) {
 }
 
 /**
- * Item status toggling, serialised per order.
+ * Item status toggling.
  *
- * Two things make this harder than it looks, both of them server behaviour:
+ * Each tap sends ONE item's change to PATCH /api/orders/:id/items/status,
+ * which updates that single row server-side. It used to rebuild and PUT the
+ * whole item list, and that is what lost work: two takers on the same order
+ * each sent the list as they last saw it, so the second write undid the first.
+ * A single-row update cannot touch an item it was not asked about.
  *
- * 1. Every PUT rebuilds the order's whole item list, so two updates racing each
- *    other clobber one another - the second carries a snapshot taken before the
- *    first landed and one tick silently disappears.
+ * Items are identified by NAME, never id. PUT /api/orders/:id rebuilds items
+ * with destroy + bulkCreate, so ids rotate on every order edit and a held id
+ * goes stale. Names are what the server matches on and are unique per order.
  *
- * 2. The rebuild is `OrderItem.destroy` + `bulkCreate` (routes/orders.js), so
- *    **every item gets a brand-new id on every save**. Any id the browser is
- *    holding is dead the moment anything in that order is written. Matching
- *    items by id therefore fails intermittently: a queued tap finds no match
- *    and is dropped, or falls back to a stale snapshot and wipes an earlier
- *    tick. That is the "marking a second item clears the first" bug.
- *
- * So we key by **name**, which is what the server itself keys on
- * (statusProvidedByName, existingItemsStatus) and which `sanitizeItems`
- * guarantees is unique within an order.
- *
- * The queue chains on the server's own response rather than re-reading the
- * cache, so each link builds on what actually persisted.
+ * Taps are still queued per order. Two taps on the SAME item (tick, then
+ * untick) must land in the order they were made, and HTTP requests do not
+ * guarantee that on their own.
  */
 const itemQueues = new Map();
 
@@ -112,9 +106,8 @@ export function useUpdateItemStatus() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ order, itemName, status, extra = {} }) => {
-      const queued = itemQueues.get(order.id);
-      const previous = queued?.promise ?? Promise.resolve(null);
+    mutationFn: ({ order, itemName, status }) => {
+      const previous = itemQueues.get(order.id) ?? Promise.resolve();
 
       // Optimistic: show the tick immediately. Takers work down a list fast and
       // should never be waiting on a round-trip to see their own tap land.
@@ -126,25 +119,14 @@ export function useUpdateItemStatus() {
       }));
 
       const next = previous
-        .catch(() => null)
-        .then(async (prevResult) => {
-          // Build on whatever the previous write in this queue actually
-          // returned; only fall back to the cache when this is the first link.
-          const base =
-            prevResult ?? findCachedOrder(queryClient, order.id) ?? order;
-
-          const items = ordersApi.itemsPayload(
-            (base.Items || []).map((item) =>
-              item.name === itemName ? { ...item, status } : item
-            )
-          );
-
-          const result = await ordersApi.updateOrder(base.id, { items, ...extra });
+        .catch(() => {})
+        .then(async () => {
+          const result = await ordersApi.setItemStatus(order.id, itemName, status);
           patchCachedOrder(queryClient, result);
           return result;
         });
 
-      itemQueues.set(order.id, { promise: next });
+      itemQueues.set(order.id, next);
 
       next
         .catch(() => {
@@ -153,21 +135,12 @@ export function useUpdateItemStatus() {
           queryClient.invalidateQueries({ queryKey: orderKeys.all });
         })
         .finally(() => {
-          if (itemQueues.get(order.id)?.promise === next) itemQueues.delete(order.id);
+          if (itemQueues.get(order.id) === next) itemQueues.delete(order.id);
         });
 
       return next;
     },
   });
-}
-
-function findCachedOrder(queryClient, orderId) {
-  const entries = queryClient.getQueriesData({ queryKey: orderKeys.all });
-  for (const [, data] of entries) {
-    const found = data?.orders?.find((o) => o.id === orderId);
-    if (found) return found;
-  }
-  return null;
 }
 
 export function useItemSuggestions() {

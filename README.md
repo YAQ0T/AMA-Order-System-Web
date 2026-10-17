@@ -190,27 +190,44 @@ the runtime safety net standing in for TypeScript.
 Related: takers never receive `price` at all (the server strips it in
 `order_helpers.js`), so it is optional, not merely nullable.
 
-### Items are keyed by NAME, never by id
+### How item writes work — read this before touching them
 
-**This is the most important invariant in the client.** The server updates items
-with `OrderItem.destroy` + `bulkCreate`, so **every item gets a new id on every
-save** and any id the browser is holding is immediately stale.
+There are two kinds of item write, and they go to **different endpoints on
+purpose**. Mixing them up is how ticks get lost.
 
-Matching by id therefore fails intermittently: a queued change finds no match and
-is silently dropped, or falls back to a stale snapshot and wipes an earlier one.
-That was the "marking a second item clears the first" bug.
+| Write | Endpoint | Sends |
+|---|---|---|
+| Tick / untick one item | `PATCH /api/orders/:id/items/status` | `{ name, status }` |
+| Add, remove, re-quantify, re-price | `PUT /api/orders/:id` | the full item list, **without `status`** |
 
-So the client keys items by `name` everywhere - the status buttons, both edit
-modals, the React list keys, and the busy-state set. Name is what the server
-itself matches on (`statusProvidedByName`), and `sanitizeItems` guarantees it is
-unique within an order. `itemsPayload` deliberately does **not** send `id`.
+**Why ticks have their own endpoint.** `PUT` replaces the order's whole item
+list with whatever arrives. When two takers work the same order, each sends the
+list as they last saw it, so the second write undoes the first. Tested against
+MySQL: done the old way, two takers ticking different items at the same moment
+lost a tick in **20 out of 20** rounds. The `PATCH` endpoint updates a single
+row, so it cannot touch an item it was not asked about: **0 out of 20**.
 
-There is a regression test for this in `src/api/schemas.test.js`. Do not "fix" it
-by putting the id back.
+**Why `PUT` omits `status`.** When the key is absent, the server keeps each
+item's current status, read *after* it locks the order row. So if a taker ticks
+an item while a maker has the edit window open, saving the edit keeps the tick
+instead of overwriting it with the window's stale copy. `itemsPayload` never
+sends `status`. The one exception is `OrderEditModal`: a **renamed** item is new
+as far as the server is concerned, so it carries its status across explicitly.
 
-Writes are also serialised per order (`useUpdateItemStatus`), each link building on
-the previous response rather than re-reading the cache, with an optimistic update
-so a tap shows instantly. Same idea as `_itemStatusQueues` in the Flutter app.
+**Items are identified by name, never by id.** `PUT` rebuilds items with
+`OrderItem.destroy` + `bulkCreate`, so every item gets a new id on every order
+edit, and any id the browser holds goes stale. Name is what the server matches
+on, and `sanitizeItems` guarantees it is unique within an order. The client keys
+items by name everywhere: the status buttons, both edit modals, React list keys,
+and the busy-state set. (The `PATCH` endpoint does not rotate ids, but `PUT`
+still does.)
+
+Regression tests for all three rules are in `src/api/schemas.test.js`. Do not
+"fix" them by putting `id` or `status` back into `itemsPayload`.
+
+Taps are queued per order in `useUpdateItemStatus`, so two taps on the same item
+(tick, then untick) land in the order they were made, with an optimistic update
+so each tap shows instantly.
 
 ### Reports are computed client-side
 
@@ -255,6 +272,21 @@ Also: schema alteration is now opt-in via `DB_ALTER=true`. It used to run on
 every start, which on MySQL can accumulate duplicate indexes until a table hits
 the 64-key limit.
 
+### Fixed takers losing each other's work
+
+Added **`PATCH /api/orders/:id/items/status`** (`routes/order_items.js`), which
+sets one item's status by name in a single-row update, under the same order row
+lock `PUT` uses. Two takers on the same order can no longer undo each other.
+Same authorization as `PUT` (admin, the order's own maker, or an assigned taker);
+takers get `409` on a completed order. Each change is written to the order
+history and the activity log, and repeating an unchanged status writes nothing.
+
+**Email policy changed with it.** A taker's `PUT` used to email the maker on
+*every* save — and since every tick was a save, that was one email per item.
+Now the maker is emailed only when a taker changes the **order status** (starts
+or finishes it). Ticks send no email and no in-app notification. A taker adding
+an item or changing a quantity still raises an in-app notification, but no email.
+
 ### Security and operational fixes
 
 6. **Added authentication to three open endpoints.** `PATCH /api/items/:itemId/status`
@@ -262,6 +294,11 @@ the 64-key limit.
    reach the server could change any item's status without a token.
    `GET /api/auth/takers` and `/accounters` were also open and returned the user
    list. All now require a valid JWT.
+
+   Authentication alone was not enough for the item endpoint: any logged-in
+   user could still change any item on **any** order, including orders not
+   assigned to them. It now goes through the same authorization, lock and
+   history logging as the new order-scoped endpoint.
 7. **Moved the VAPID keys to environment variables.** They were hardcoded in
    `utils/push.js`, including the private key, and are in the Flutter repo's git
    history. Generate a fresh pair with `npx web-push generate-vapid-keys`.
@@ -302,6 +339,7 @@ The web client uses the hyphenated key throughout.
 | `client/` | `npm test` | Unit tests (51) |
 | `server/` | `npm run db:create` | Create the database with utf8mb4 |
 | `server/` | `npm run db:check` | Verify connection, charset and Arabic round-trip |
+| `server/` | `npm run test:integration` | 92 checks against the real server + MySQL, on a throwaway database |
 | `server/` | `npm run dev` | API with nodemon |
 | `server/` | `npm start` | API |
 | root | `node tools/mock-api.js` | Fake API, no database |

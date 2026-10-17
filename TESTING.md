@@ -75,28 +75,41 @@ Against the mock, driving the real UI:
 
 ---
 
+## Verified against the real server and MySQL 26.7
+
+Run with `npm run test:integration` in `server/` (see below). It creates a
+throwaway database, runs everything against the real routes and real MySQL, and
+drops it afterwards — your own database is never touched.
+
+| Area | Verified |
+|---|---|
+| Setup | `db:check`: auth plugin, utf8mb4, Arabic round-trip, DECIMAL as string, Arabic `LIKE` |
+| Startup | Fresh database: tables created, admin seeded (this used to fail — see README) |
+| Security | Item, takers and suggestions endpoints reject requests without a token |
+| Auth | Register, unapproved login blocked, admin approval, role guards on admin routes |
+| Arabic | Title, description, city and item names survive MySQL intact |
+| Prices | DECIMAL arrives as a string; taker writes never wipe prices |
+| Taker ticks | 3 quick taps all persist; item ids no longer rotate on a tick |
+| **Two takers** | **4 simultaneous ticks from 2 takers, 20 rounds: 0 lost** (old way: 20 of 20 lost) |
+| Maker vs taker | Maker saves an edit while a taker ticks, 20 rounds: both changes survive |
+| Taker vs taker | One adds an item while the other ticks, 20 rounds: tick, item and prices survive |
+| Rename | A renamed item keeps its status |
+| Authorization | Unassigned taker, accounter and another maker's order → 403; completed order → 409 |
+| Notifications | Ticks create none; an order status change notifies the maker once |
+| History | Each tick recorded once; repeating the same status adds nothing |
+| Lifecycle | pending → in-progress → completed → entered_erp, with the accounter guard |
+| Search | Arabic substring search and item suggestions |
+| Archived | Create without assignment, activation guard, send, delete |
+| UI | Real browser on the real server: 5 rapid taps → 5 single-item calls, all saved |
+| UI | Maker's edit window open while another taker unticks: the untick survives |
+
+---
+
 ## What still needs testing — and how
 
 These cannot be checked without your real environment. Roughly in order of risk.
 
-### 1. Everything above, against real MySQL
-
-The mock copies response *shapes*, not Sequelize. Re-run the item-status test in
-particular: mark three items in one order in quick succession, then reload and
-confirm all three stuck. That is the bug you found, and the real server is
-slower than the mock, so the race window is wider.
-
-Also confirm:
-- `History` (سجل التعديلات) populates and reads sensibly — the server writes an
-  `OrderLog` row per item change, so expect it to be **noisy**
-- Pagination totals are right (the server uses `distinct: true` with joins,
-  which can miscount)
-- **Arabic saved and read back correctly.** Create an order with an Arabic
-  customer name and item, then reload. If you see `????`, the database was not
-  created with utf8mb4 - drop it and recreate with the statement in
-  `server/.env.example`.
-
-### 2. Email — the one that can embarrass you
+### 1. Email — the one that can embarrass you
 
 **Nothing in my testing sent a single email.** The server sends on order create,
 order update, and bulk send. Before real use:
@@ -112,7 +125,11 @@ per order, so ten orders is ten emails. Check whether takers want one mail per
 order or one digest; the server has a `/api/orders/bulk-email` endpoint for the
 digest shape that the web client does not currently call.
 
-### 3. Printing on your actual printer
+Also check the maker email policy behaves as agreed: ticking items should send
+**nothing**; the maker should get one email when a taker **starts** the order and
+one when they **finish** it.
+
+### 2. Printing on your actual printer
 
 I verified the print HTML renders correctly on screen. I could not verify paper.
 
@@ -125,17 +142,20 @@ I verified the print HTML renders correctly on screen. I could not verify paper.
 - Print an order with 20+ items to check the page break and that the table
   header repeats
 
-### 4. Multi-user concurrency
+### 3. Two real devices on the LAN
 
-I tested one browser. Untested: two takers on the same order at once. Given the
-server rebuilds the whole item list on every write, **two takers marking
-different items in the same order simultaneously will very likely clobber each
-other** — the per-order queue only serialises within one browser tab.
+Two takers ticking the same order is **fixed and verified** against MySQL (see
+the table above). What is left is the human version: two phones on your
+network, same order, both ticking different items as fast as they can. It
+should simply work. If it does not, that is a real bug — tell me.
 
-To test: two machines, same order, both mark different items within a second.
-If it loses ticks, the fix belongs on the server (see below).
+One limitation remains, and it is much rarer: two people making a
+**structural** edit to the same order at the same moment — for example both
+adding an item within the same second. Those still go through `PUT`, which
+replaces the whole item list, so one of the two additions can be lost. Ticks are
+not affected. See the end of this file.
 
-### 5. Web push
+### 4. Web push
 
 Needs HTTPS and real VAPID keys. `http://192.168.x.x` will **not** work —
 browsers refuse service workers outside a secure context.
@@ -144,13 +164,13 @@ browsers refuse service workers outside a secure context.
 2. Serve over HTTPS or test on `localhost`
 3. Bell menu → "تفعيل إشعارات المتصفح"
 
-### 6. Scale
+### 5. Scale
 
 Everything was tested with 47 orders. Reports page through the **entire**
 history 20 rows at a time, so at a few thousand orders expect it to crawl. Test
 with a realistic year of data before trusting the Reports tab.
 
-### 7. The Arabic itself
+### 6. The Arabic itself
 
 I am not a native speaker and I guessed at your internal terminology. Sit a
 maker and a taker in front of it for ten minutes. In particular:
@@ -160,21 +180,21 @@ maker and a taker in front of it for ten minutes. In particular:
 - `تم التجهيز` vs `غير متوفر` for item statuses
 - Whether `حفظ كمؤرشف` reads as "save as draft" to them
 
-### 8. F3 and F7
+### 7. F3 and F7
 
 Ask a maker whether stealing these from the browser feels right. F3 is normally
 Find and F7 toggles caret browsing in Firefox.
 
-### 9. Their actual browsers and devices
+### 8. Their actual browsers and devices
 
 Tested in one Chromium engine at desktop width. Check whatever your staff
 actually use, and a phone if takers work from one.
 
 ---
 
-## Known server issue — the root cause of the bug you found
+## The server's item rewrite, and what is left of it
 
-`routes/orders.js` updates items like this:
+`PUT /api/orders/:id` updates items like this:
 
 ```js
 await OrderItem.destroy({ where: { orderId: order.id }, transaction });
@@ -182,23 +202,20 @@ await OrderItem.destroy({ where: { orderId: order.id }, transaction });
 await OrderItem.bulkCreate(orderItems, { transaction });
 ```
 
-Every save **deletes every item row and recreates them with new IDs**. Consequences:
+Every structural save **deletes every item row and recreates them with new
+IDs**. That was the root of both bugs found so far. Where things stand:
 
-1. **Any item ID a client holds is dead** the moment anything in that order is
-   written. This is what made marking a second item clear the first. The web
-   client is now immune — it keys everything by item *name*, which is what the
-   server itself matches on and which `sanitizeItems` guarantees is unique
-   within an order.
-2. **`PATCH /api/items/:itemId/status` is effectively unusable** — the ID is
-   stale almost immediately. The web client does not use it. The old React front
-   did.
-3. Item `createdAt` is lost on every save.
-4. Two clients writing the same order concurrently will clobber each other
-   regardless of what either client does.
+| Consequence | Status |
+|---|---|
+| A held item id goes stale, so a tick misses or wipes another | **Fixed** — the client identifies items by name everywhere |
+| Two takers ticking the same order undo each other | **Fixed** — ticks use `PATCH /api/orders/:id/items/status`, a single-row update. 0 of 20 lost, against 20 of 20 before |
+| A maker's edit overwrites ticks made while the edit window was open | **Fixed** — structural edits no longer send `status`, so the server keeps the live value |
+| `PATCH /api/items/:itemId/status` let any user change any order | **Fixed** — same authorization as the new endpoint |
+| Two people make a **structural** edit to one order in the same second | **Still possible.** Each `PUT` carries the full list, so one person's added item can disappear. Rare, and ticks are unaffected |
+| Item `createdAt` is reset on every structural save | Still true. Nothing in the app reads it |
 
-I did **not** change this. It is the core write path of the server
-and I could not test it against a real database from here. The proper fix is to
-diff the incoming list against existing rows and `update` / `create` / `destroy`
-only what changed, keyed by name — which would also fix (4) and make the
-`OrderLog` far less noisy. Worth doing, but it deserves its own change with real
-data behind it.
+The remaining fix is to make `PUT` diff the incoming list against the existing
+rows and `update` / `create` / `destroy` only what changed, keyed by name. That
+would close the structural-edit race, keep ids stable, and make the order
+history quieter. It is a rewrite of the server's main write path, so it is
+worth doing only if the structural-edit race turns out to happen in practice.

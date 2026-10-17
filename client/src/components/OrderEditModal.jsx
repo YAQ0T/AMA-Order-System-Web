@@ -82,13 +82,19 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
       }
       seen.add(name.toLowerCase());
 
-      // Always send every field. The server distinguishes a missing `status`
-      // key from an explicit null when deciding whether to clear it.
+      // Leave `status` out for items that keep their name: the server then
+      // preserves each item's CURRENT status, read after it locks the order.
+      // A taker may have ticked items while this modal was open, and sending
+      // the statuses we loaded would silently overwrite their work.
+      //
+      // A RENAMED item is new as far as the server is concerned (it matches by
+      // name), so it would come back with no status - carry it across.
+      const renamed = row.originalName != null && row.originalName !== name;
       cleaned.push({
         name,
         quantity: qty,
         price,
-        status: row.status ?? null,
+        ...(renamed ? { status: row.status ?? null } : {}),
       });
     }
 
