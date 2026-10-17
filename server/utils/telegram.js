@@ -1,5 +1,5 @@
 /**
- * Telegram notifications for takers.
+ * Telegram notifications for takers and accountants.
  *
  * Why Telegram rather than browser push: web push proved unreliable on exactly
  * the phones that matter here - Samsung puts the browser to sleep to save
@@ -131,6 +131,42 @@ function orderUpdatedMessage(order, editor) {
     return [`✏️ <b>تعديل على الطلب ${ltr(`#${order.id}`)}</b>`, '', ...orderDetails(order, editor)].join('\n');
 }
 
+/**
+ * For the accountant: an order is completed and waiting to be entered into
+ * ERP. What they need at a glance is which order, and which items did NOT go
+ * out. Prices are left out on purpose: the app shows them, and a total in a
+ * notification would have to decide whether unavailable items count - a
+ * billing rule that belongs in the app, not in a chat message.
+ */
+function orderReadyForErpMessage(order) {
+    const items = order.Items || [];
+    const unavailable = items.filter((i) => i.status === 'unavailable');
+    const takers = (order.AssignedTakers || []).map((t) => t.username).filter(Boolean);
+
+    const lines = items.slice(0, MAX_ITEMS_IN_MESSAGE).map((i) => {
+        const line = `${esc(i.name)} × ${ltr(formatQty(i.quantity))}`;
+        return i.status === 'unavailable' ? `• <s>${line}</s> ❌ غير متوفر` : `• ${line}`;
+    });
+    if (items.length > MAX_ITEMS_IN_MESSAGE) {
+        lines.push(`… و${items.length - MAX_ITEMS_IN_MESSAGE} أصناف أخرى`);
+    }
+
+    const count = `📦 الأصناف (${ltr(items.length)})`
+        + (unavailable.length ? ` — ${ltr(unavailable.length)} غير متوفر` : '')
+        + ':';
+
+    return [
+        `✅ <b>طلب جاهز للإدخال على ERP ${ltr(`#${order.id}`)}</b>`,
+        '',
+        `👤 الزبون: <b>${esc(order.title || '—')}</b>`,
+        `📍 المدينة: ${esc(order.city || '—')}`,
+        takers.length ? `🧺 ${takers.length > 1 ? 'المجهّزون' : 'المجهّز'}: ${esc(takers.join('، '))}` : null,
+        '',
+        count,
+        ...lines,
+    ].filter((l) => l !== null).join('\n');
+}
+
 const HELP_TEXT = [
     'مرحباً 👋',
     'لربط حسابك: افتح نظام الطلبات من حسابك واضغط «ربط تيليغرام».',
@@ -141,10 +177,16 @@ const EXPIRED_TEXT = [
     'ارجع لنظام الطلبات واضغط «ربط تيليغرام» مرة أخرى.',
 ].join('\n');
 
-function openButton() {
+/** `path` is the page the button opens: /taker for takers, /accounter for accountants. */
+function openButton(path = '/taker') {
     const url = (process.env.APP_URL || '').trim().replace(/\/$/, '');
-    return url ? { text: 'فتح نظام الطلبات', url: `${url}/taker` } : null;
+    return url ? { text: 'فتح نظام الطلبات', url: `${url}${path}` } : null;
 }
+
+// Roles that receive Telegram messages. Makers deliberately do not: they work
+// at a desk with the app open, and the bell is enough. Admins likewise.
+const LINKABLE_ROLES = new Set(['taker', 'accounter']);
+const canLink = (role) => LINKABLE_ROLES.has(role);
 
 // ---------------------------------------------------------------------------
 // Sending
@@ -222,12 +264,12 @@ async function partitionByTelegram(users) {
 /**
  * Message each user on Telegram if they have linked it. Resolves to the users
  * it could NOT reach (not linked, or the send failed); they only have the
- * in-app notification.
+ * in-app notification. `path` is where the message's button leads.
  */
-async function deliverToTakers(users, buildText) {
+async function deliverTo(users, buildText, { path = '/taker' } = {}) {
     const { linked, unlinked } = await partitionByTelegram(users);
     const failed = [];
-    const button = openButton();
+    const button = openButton(path);
     await Promise.all(
         linked.map(async ({ user, chatId }) => {
             const ok = await safeSend(chatId, buildText(user), { button });
@@ -292,10 +334,13 @@ async function handleUpdate(update) {
         linkCodeExpiresAt: null,
     });
 
-    const user = await User.findByPk(link.userId, { attributes: ['username'] });
+    const user = await User.findByPk(link.userId, { attributes: ['username', 'role'] });
+    const whatComesHere = user?.role === 'accounter'
+        ? 'ستصلك هنا الطلبات المكتملة الجاهزة للإدخال على ERP.'
+        : 'ستصلك هنا الطلبات الجديدة وأي تعديل عليها.';
     await safeSend(chatId, [
         `✅ تم ربط حسابك <b>${esc(user?.username || '')}</b> بنجاح.`,
-        'ستصلك هنا الطلبات الجديدة وأي تعديل عليها.',
+        whatComesHere,
     ].join('\n'));
 }
 
@@ -376,13 +421,15 @@ function stop() {
 
 module.exports = {
     enabled,
+    canLink,
     start,
     stop,
     getBotUsername,
     createLinkCode,
-    deliverToTakers,
+    deliverTo,
     partitionByTelegram,
     notifyUnlinked,
     orderAssignedMessage,
     orderUpdatedMessage,
+    orderReadyForErpMessage,
 };

@@ -423,7 +423,7 @@ const server = http.createServer(async (req, res) => {
   // server/test/telegram.test.mjs against a fake Telegram API.
   if (pathname === '/api/telegram/status') {
     if (needsAuth()) return undefined;
-    return send(200, { enabled: false, botUsername: null, linked: false, telegramUsername: null, linkedAt: null });
+    return send(200, { enabled: false, canLink: false, botUsername: null, linked: false, telegramUsername: null, linkedAt: null });
   }
 
   // ---- items ----

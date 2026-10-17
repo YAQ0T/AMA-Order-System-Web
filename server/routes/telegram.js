@@ -13,6 +13,9 @@ router.get('/status', authenticateToken, async (req, res) => {
         const linked = Boolean(link?.chatId);
         res.json({
             enabled: telegram.enabled(),
+            // Only roles that are actually sent messages may link; the app
+            // hides the card for everyone else.
+            canLink: telegram.canLink(req.user.role),
             botUsername: telegram.getBotUsername(),
             linked,
             telegramUsername: linked ? link.telegramUsername : null,
@@ -29,6 +32,11 @@ router.get('/status', authenticateToken, async (req, res) => {
 router.post('/link', authenticateToken, async (req, res) => {
     if (!telegram.enabled()) {
         return res.status(503).json({ error: 'Telegram is not configured on the server' });
+    }
+    // Linking a role that is never messaged would look like it worked and then
+    // deliver nothing - refuse instead.
+    if (!telegram.canLink(req.user.role)) {
+        return res.status(403).json({ error: 'Telegram notifications are only for takers and accountants' });
     }
     try {
         const { appUrl, url, expiresAt } = await telegram.createLinkCode(req.user.id);

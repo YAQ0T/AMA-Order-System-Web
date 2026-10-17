@@ -234,7 +234,7 @@ router.post('/', authenticateToken, async (req, res) => {
         // still has the in-app notification created just above.
         if (completeOrder.AssignedTakers && completeOrder.AssignedTakers.length > 0) {
             const maker = await User.findByPk(req.user.id, { attributes: ['id', 'username'] });
-            telegram.deliverToTakers(completeOrder.AssignedTakers, () => telegram.orderAssignedMessage(completeOrder, maker))
+            telegram.deliverTo(completeOrder.AssignedTakers, () => telegram.orderAssignedMessage(completeOrder, maker))
                 .catch(err => {
                     console.error('Error notifying takers of new order:', err);
                 });
@@ -834,12 +834,23 @@ router.put('/:id', authenticateToken, async (req, res) => {
             });
         }
 
+        // The order just became completed: tell its accountant on Telegram that
+        // it is ready to enter into ERP (if they have linked Telegram - the
+        // in-app notification was created inside the transaction either way).
         if (accounterToNotify) {
             sendPushNotification(accounterToNotify, {
                 title: 'New Completed Order',
                 body: `Order #${order.id}: ${order.title || 'Untitled Order'} is ready for review`,
                 url: `/`
             });
+
+            const accounter = await User.findByPk(accounterToNotify, { attributes: ['id', 'username'] });
+            if (accounter) {
+                telegram.deliverTo([accounter], () => telegram.orderReadyForErpMessage(updatedOrder), { path: '/accounter' })
+                    .catch(err => {
+                        console.error('Error notifying accountant of completed order:', err);
+                    });
+            }
         }
 
         // There is no email. Makers and accountants are told through the
@@ -857,7 +868,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
                 ? () => telegram.orderAssignedMessage(updatedOrder, editor)
                 : () => telegram.orderUpdatedMessage(updatedOrder, editor);
 
-            telegram.deliverToTakers(updatedOrder.AssignedTakers, buildText).catch(err => {
+            telegram.deliverTo(updatedOrder.AssignedTakers, buildText).catch(err => {
                 console.error('Error notifying takers of order update:', err);
             });
         }

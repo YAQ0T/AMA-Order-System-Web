@@ -5,6 +5,25 @@ import { fetchTelegramStatus, createTelegramLink, unlinkTelegram } from '../api/
 import { useToast } from './Toast';
 import { Spinner } from './ui';
 import { T } from '../lib/labels';
+import { useAuth } from '../store/auth';
+
+// Wording and tone per role. For takers Telegram is the only thing that
+// reaches their phone, so the prompt is amber and says so. For accountants it
+// is a convenience on top of the in-app bell, so it stays calm and blue.
+const COPY = {
+  taker: {
+    title: T.telegramPromptTitle,
+    body: T.telegramPromptBody,
+    linked: T.telegramLinked,
+    tone: 'border-amber-300 bg-amber-50 dark:border-amber-500/40 dark:bg-amber-500/10',
+  },
+  accounter: {
+    title: T.telegramPromptTitleAccounter,
+    body: T.telegramPromptBodyAccounter,
+    linked: T.telegramLinkedAccounter,
+    tone: 'border-sky-200 bg-sky-50/70 dark:border-sky-500/30 dark:bg-sky-500/10',
+  },
+};
 
 const STATUS_KEY = ['telegram', 'status'];
 
@@ -34,6 +53,8 @@ function TelegramIcon({ className = 'h-6 w-6' }) {
  */
 export default function TelegramLinkCard() {
   const toast = useToast();
+  const role = useAuth((st) => st.user?.role);
+  const copy = COPY[role] || COPY.taker;
   const queryClient = useQueryClient();
   const [pending, setPending] = useState(null); // { appUrl, url, expiresAt }
   const pendingRef = useRef(null);
@@ -94,13 +115,14 @@ export default function TelegramLinkCard() {
   };
 
   const status = statusQuery.data;
-  if (!status?.enabled) return null;
+  // Hidden when the server has no bot, or for roles that are never messaged.
+  if (!status?.enabled || !status.canLink) return null;
 
   if (status.linked) {
     return (
       <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200">
         <TelegramIcon className="h-5 w-5" />
-        <span className="font-bold">✓ {T.telegramLinked}</span>
+        <span className="font-bold">✓ {copy.linked}</span>
         {status.telegramUsername && (
           <span dir="ltr" className="text-xs opacity-75">
             @{status.telegramUsername}
@@ -124,7 +146,7 @@ export default function TelegramLinkCard() {
       <section className="card mb-4 border-sky-200 bg-sky-50/70 p-4 dark:border-sky-500/30 dark:bg-sky-500/10">
         <div className="mb-3 flex items-center gap-2">
           <TelegramIcon />
-          <h3 className="text-sm font-bold">{T.telegramPromptTitle}</h3>
+          <h3 className="text-sm font-bold">{copy.title}</h3>
         </div>
 
         <ol className="mb-3 flex flex-col gap-3 text-sm">
@@ -163,11 +185,11 @@ export default function TelegramLinkCard() {
   }
 
   return (
-    <section className="card mb-4 flex flex-col gap-3 border-amber-300 bg-amber-50 p-4 sm:flex-row sm:items-center dark:border-amber-500/40 dark:bg-amber-500/10">
+    <section className={`card mb-4 flex flex-col gap-3 p-4 sm:flex-row sm:items-center ${copy.tone}`}>
       <TelegramIcon className="h-8 w-8 shrink-0" />
       <div className="flex-1">
-        <h3 className="text-sm font-bold">{T.telegramPromptTitle}</h3>
-        <p className="mt-0.5 text-xs text-slate-600 dark:text-ink-400">{T.telegramPromptBody}</p>
+        <h3 className="text-sm font-bold">{copy.title}</h3>
+        <p className="mt-0.5 text-xs text-slate-600 dark:text-ink-400">{copy.body}</p>
       </div>
       <button
         type="button"

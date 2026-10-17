@@ -77,7 +77,7 @@ Against the mock, driving the real UI:
 
 ## Verified against the real server and MySQL 26.7
 
-Run with `npm run test:integration` in `server/` — 129 checks across three suites. It creates a
+Run with `npm run test:integration` in `server/` — 143 checks across three suites. It creates a
 throwaway database, runs everything against the real routes and real MySQL, and
 drops it afterwards — your own database is never touched.
 
@@ -109,6 +109,8 @@ drops it afterwards — your own database is never touched.
 | Telegram routing | Only linked takers are messaged; sending out an archived order sends "new order", not also "updated"; a taker's own actions send nothing |
 | Telegram lifecycle | Unlink from the app; blocking the bot unlinks automatically; deleting a linked user works |
 | Telegram UI | Real browser: link → open Telegram → Start → card turns green on its own, with toasts for link and unlink |
+| Telegram accountant | Welcome says ERP orders will arrive; starting an order sends nothing; completing it sends exactly one "ready for ERP" with the unavailable item struck through and counted, no prices, button to `/accounter`; entering ERP sends nothing; unlinked accountant gets nothing (disabling the send fails 4 checks) |
+| Telegram roles | Makers and admins are told they cannot link, and get 403 if they try |
 
 ---
 
@@ -118,18 +120,24 @@ These cannot be checked without your real environment. Roughly in order of risk.
 
 ### 1. Telegram with a real bot and real phones
 
-Everything was verified against a fake Telegram API; the real one has not been
-touched yet. Create the bot (README → "Telegram notifications for takers"), then:
+Everything was verified against a fake Telegram API. The real bot
+(`@AMA_Orders_Bot`) is configured and the server connects to it, but no real
+phone has been linked yet. On the same Wi-Fi as the server, open
+`http://<server-ip>:6001` on the phone (the server log prints the address),
+then:
 
-1. As a taker on an **iPhone**: open the system in Safari, tap **ربط تيليغرام**,
-   then **فتح تيليغرام**. Telegram should open straight on the bot. Tap Start.
+1. As a taker on an **iPhone**: log in, tap **ربط تيليغرام**, then
+   **فتح تيليغرام**. Telegram should open straight on the bot. Tap Start.
    The card in the system should turn green within a few seconds.
-2. Do the same on a **Samsung**.
+2. Do the same as a second taker on a **Samsung**.
 3. As the maker, create an order assigned to both. Each phone should get the
    message with the phone **locked** and Telegram **closed** — that is the case
    web push kept failing.
-4. If **فتح تيليغرام** does nothing on a phone, try the "لم يُفتح التطبيق؟" link
-   under it and tell me which phone it was.
+4. Link an **accountant** the same way, then have a taker finish an order
+   assigned to that accountant. The accountant should get "جاهز للإدخال على ERP".
+5. If **فتح تيليغرام** does nothing on a phone, try the "لم يُفتح التطبيق؟" link
+   under it and tell me which phone it was. If the page does not load on the
+   phone at all, Windows Firewall is blocking port 6001.
 
 ### 2. Every taker is actually linked
 

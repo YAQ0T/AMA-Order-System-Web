@@ -195,6 +195,68 @@ console.log('\nEdits');
   ok((await toChat(555)).length === before, "the taker's own actions do not message them");
 }
 
+// ---- accountant ------------------------------------------------------------
+console.log('\nAccountant');
+{
+  const accTok = await login('acc1');
+  ok((await status(accTok)).canLink === true, 'accountants may link');
+
+  const r = await call('POST', '/api/telegram/link', { token: accTok });
+  let before = (await toChat(888)).length;
+  await tg.say(888, `/start ${new URL(r.data.url).searchParams.get('start')}`, { username: 'the_accountant' });
+  await waitFor(async () => (await status(accTok)).linked);
+  const welcome = await newMessages(888, before);
+  ok(welcome.some((x) => x.text.includes('ERP')), 'the welcome message tells the accountant what will arrive (ERP-ready orders)');
+
+  const oid = await createOrder('مخبز الأمل', [
+    { name: 'طحين', quantity: 5, price: 33.33 },
+    { name: 'خميرة', quantity: 2, price: 7.77 },
+  ], ['taker1']);
+  await call('PATCH', `/api/orders/${oid}/items/status`, { token: taker1, body: { name: 'خميرة', status: 'unavailable' } });
+
+  before = (await toChat(888)).length;
+  await call('PUT', `/api/orders/${oid}`, { token: taker1, body: { status: 'in-progress' } });
+  await sleep(1200);
+  ok((await toChat(888)).length === before, 'starting an order does not message the accountant');
+
+  const takerBefore = (await toChat(555)).length;
+  await call('PUT', `/api/orders/${oid}`, { token: taker1, body: { status: 'completed' } });
+  const msgs = await newMessages(888, before);
+  const text = msgs[0]?.text || '';
+  ok(msgs.length === 1, 'completing it sends the accountant exactly one message', `${msgs.length}`);
+  ok(text.includes('جاهز للإدخال على ERP') && text.includes(`#${oid}`) && text.includes('مخبز الأمل'),
+    'it says the order is ready for ERP, with number and customer');
+  ok(text.includes('<s>خميرة') && text.includes('❌ غير متوفر') && text.includes('1⁩ غير متوفر'),
+    'the unavailable item is struck through and counted, so it is not billed');
+  ok(!text.includes('33.33') && !text.includes('7.77'), 'no prices in the message');
+  ok(msgs[0]?.button?.url === 'http://192.168.1.10:6001/accounter', "its button opens the accountant's page", JSON.stringify(msgs[0]?.button));
+  ok((await toChat(555)).length === takerBefore, 'the taker who completed it is not messaged');
+
+  const afterReady = (await toChat(888)).length;
+  await call('PUT', `/api/orders/${oid}`, { token: accTok, body: { status: 'entered_erp' } });
+  await sleep(1200);
+  ok((await toChat(888)).length === afterReady, "entering it into ERP sends nothing (that was the accountant's own action)");
+
+  // Unlinked accountant: completion only shows in the app.
+  await call('DELETE', '/api/telegram/link', { token: accTok });
+  await sleep(500);
+  const quiet = (await toChat(888)).length;
+  const o2 = await createOrder('بعد فك ربط المحاسب', [{ name: 'ملح', quantity: 1, price: 1 }], ['taker1']);
+  await call('PUT', `/api/orders/${o2}`, { token: taker1, body: { status: 'in-progress' } });
+  await call('PUT', `/api/orders/${o2}`, { token: taker1, body: { status: 'completed' } });
+  await sleep(1500);
+  ok((await toChat(888)).length === quiet, 'an unlinked accountant gets nothing on Telegram');
+}
+
+console.log('\nWho may link');
+{
+  ok((await status(maker)).canLink === false, 'makers are told they cannot link (the app hides the card)');
+  const m = await call('POST', '/api/telegram/link', { token: maker });
+  ok(m.status === 403, 'a maker asking for a link gets 403', `got ${m.status}`);
+  const a = await call('POST', '/api/telegram/link', { token: admin });
+  ok(a.status === 403, 'so does an admin', `got ${a.status}`);
+}
+
 // ---- unlinking -------------------------------------------------------------
 console.log('\nUnlinking');
 {

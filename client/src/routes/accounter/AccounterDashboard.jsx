@@ -9,6 +9,7 @@ import { useToast } from '../../components/Toast';
 import { useOrdersQuery, useUpdateOrder } from '../../hooks/useOrders';
 import { printOrders } from '../../print/printOrders';
 import { T } from '../../lib/labels';
+import TelegramLinkCard from '../../components/TelegramLinkCard';
 
 const PAGE_SIZE = 20;
 
@@ -92,6 +93,8 @@ export default function AccounterDashboard() {
 
   return (
     <>
+      <TelegramLinkCard />
+
       <TabLinks
         tabs={[
           { to: '/accounter/completed', label: T.completed },

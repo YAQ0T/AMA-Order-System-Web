@@ -113,7 +113,10 @@ export const T = {
   telegramLinked: 'الطلبات تصلك على تيليغرام',
   telegramUnlink: 'فك الربط',
   telegramLinkedToast: 'تم ربط تيليغرام بنجاح',
-  telegramUnlinkedToast: 'تم فك الربط. لن تصلك الطلبات على هاتفك بعد الآن.',
+  telegramUnlinkedToast: 'تم فك الربط. لن تصلك الإشعارات على هاتفك بعد الآن.',
+  telegramPromptTitleAccounter: 'استلم الطلبات الجاهزة على تيليغرام',
+  telegramPromptBodyAccounter: 'اربط حسابك مرة واحدة ليصلك إشعار على هاتفك كلما اكتمل طلب وأصبح جاهزاً للإدخال على ERP.',
+  telegramLinkedAccounter: 'إشعارات الطلبات الجاهزة تصلك على تيليغرام',
   telegramExpired: 'انتهت صلاحية الرابط. اضغط «ربط تيليغرام» مرة أخرى.',
 
   // Tabs

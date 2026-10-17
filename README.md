@@ -354,7 +354,7 @@ The web client uses the hyphenated key throughout.
 | `client/` | `npm test` | Unit tests (51) |
 | `server/` | `npm run db:create` | Create the database with utf8mb4 |
 | `server/` | `npm run db:check` | Verify connection, charset and Arabic round-trip |
-| `server/` | `npm run test:integration` | 129 checks against the real server + MySQL, on a throwaway database. Add `-- telegram` to run one suite |
+| `server/` | `npm run test:integration` | 143 checks against the real server + MySQL, on a throwaway database. Add `-- telegram` to run one suite |
 | `server/` | `npm run dev` | API with nodemon |
 | `server/` | `npm start` | API |
 | root | `node tools/mock-api.js` | Fake API, no database |
@@ -391,7 +391,7 @@ mock's latency knob.
 cd client && npm test
 ```
 
-## Telegram notifications for takers
+## Telegram notifications (takers and accountants)
 
 Telegram is **the only way the system reaches a phone** — there is no email.
 It works on iPhone and Android, needs **no HTTPS, no domain and no port
@@ -427,22 +427,29 @@ used once.
 
 ### What gets sent, and to whom
 
-| Event | Linked taker | Not linked |
-|---|---|---|
-| New order assigned to them | Telegram: "new order" | in-app only |
-| Archived order sent out to them | Telegram: "new order" | in-app only |
-| Maker edits their order | Telegram: "order updated" | in-app only |
+| Event | Who | If linked | If not linked |
+|---|---|---|---|
+| New order assigned | its takers | Telegram: "new order" | in-app only |
+| Archived order sent out | its takers | Telegram: "new order" | in-app only |
+| Maker edits an order | its takers | Telegram: "order updated" | in-app only |
+| Taker completes an order | its accountant | Telegram: "ready for ERP" | in-app only |
 
-Messages list the customer, city, note and items with quantities — **never
-prices**. Orders longer than 15 items are cut off with "and N more".
+Messages list the customer, city and items with quantities — **never prices**.
+Orders longer than 15 items are cut off with "and N more". The accountant's
+message strikes through unavailable items and counts them, so they are not
+billed. Nobody is messaged about their own action.
 
 **An unlinked taker only finds out when they open the app** — the bell and the
 order list, nothing on their phone. That is the cost of having no email, and
 why the "link Telegram" card on the taker page is amber and says so. If a taker
 blocks the bot, or Telegram reports their chat gone, they are unlinked
 automatically so the card reappears instead of the system pretending they are
-reachable. Makers and accountants are not on Telegram; they get in-app
-notifications only.
+reachable.
+
+**Accountants** link from a card at the top of their page too, in calm blue
+rather than amber — for them it is a convenience on top of the bell, not their
+only channel. **Makers and admins cannot link** (`POST /api/telegram/link`
+returns 403); they work at a desk with the app open and use the bell.
 
 Implementation: `server/utils/telegram.js` (bot, polling, messages),
 `server/routes/telegram.js` (link / unlink / status), the `TelegramLinks` table,
