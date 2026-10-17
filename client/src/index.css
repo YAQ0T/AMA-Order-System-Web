@@ -1,0 +1,175 @@
+@import 'tailwindcss';
+
+/* Dark mode is driven by a class on <html>, because the preference is stored
+   per user on the server (User.prefersDark), not by the OS setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Self-hosted so the app works on a LAN with no internet access.
+   Same files the Flutter app ships in assets/fonts/. */
+@font-face {
+  font-family: 'Noto Sans Arabic';
+  src: url('/fonts/NotoSansArabic-Regular.ttf') format('truetype');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Noto Naskh Arabic';
+  src: url('/fonts/NotoNaskhArabic-Regular.ttf') format('truetype');
+  font-weight: 400 700;
+  font-display: swap;
+}
+
+@theme {
+  --font-sans: 'Noto Sans Arabic', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-naskh: 'Noto Naskh Arabic', 'Noto Sans Arabic', serif;
+
+  /* Brand — light theme seed matches the Flutter app's 0xFF2F7A72 teal. */
+  --color-brand-50: #eef6f5;
+  --color-brand-100: #d6e9e6;
+  --color-brand-200: #aed3ce;
+  --color-brand-300: #7cb8b0;
+  --color-brand-400: #4f9b91;
+  --color-brand-500: #2f7a72;
+  --color-brand-600: #25625c;
+  --color-brand-700: #1e4e49;
+  --color-brand-800: #193f3b;
+  --color-brand-900: #143331;
+
+  /* Dark theme palette — lifted from lib/src/config/app_colors.dart. */
+  --color-ink-950: #0f172a;
+  --color-ink-900: #1e293b;
+  --color-ink-700: #334155;
+  --color-ink-400: #94a3b8;
+  --color-ink-50: #f8fafc;
+
+  --color-accent: #ec4899;
+  --color-indigo: #6366f1;
+
+  /* Order status colours, matching AppColors so both clients agree. */
+  --color-status-pending: #94a3b8;
+  --color-status-progress: #fbbf24;
+  --color-status-completed: #34d399;
+  --color-status-archived: #64748b;
+  --color-status-erp: #8b5cf6;
+  --color-status-error: #ef4444;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background-color: #f4f6f5;
+    color: #0f172a;
+  }
+
+  .dark body {
+    background-color: var(--color-ink-950);
+    color: var(--color-ink-50);
+  }
+
+  /* Arabic script has no uppercase; make sure nothing tries. */
+  button,
+  input,
+  select,
+  textarea {
+    font-family: inherit;
+    text-transform: none;
+  }
+
+  /* Numbers, IDs, dates and prices must render left-to-right even inside an
+     RTL page, otherwise bidi reordering turns "#1024" into "1024#" and
+     mangles timestamps. Everything numeric gets this class. */
+  .ltr {
+    direction: ltr;
+    unicode-bidi: isolate;
+    display: inline-block;
+  }
+
+  /* Keep focus rings visible for keyboard-driven data entry. */
+  :focus-visible {
+    outline: 2px solid var(--color-brand-500);
+    outline-offset: 2px;
+  }
+
+  .dark :focus-visible {
+    outline-color: var(--color-indigo);
+  }
+}
+
+/* `@utility` (not `@layer components`) so these can be composed with @apply.
+   In Tailwind v4, @apply only accepts real utilities, not other custom classes. */
+@utility card {
+  @apply rounded-xl border border-slate-200 bg-white shadow-sm;
+
+  .dark & {
+    @apply border-slate-700 bg-ink-900 shadow-none;
+  }
+}
+
+@utility input {
+  @apply w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm
+         text-slate-900 transition outline-none
+         focus:border-brand-500 focus:bg-white focus:ring-2 focus:ring-brand-500/20
+         disabled:cursor-not-allowed disabled:opacity-60;
+
+  .dark & {
+    @apply border-slate-600 bg-ink-950/60 text-ink-50
+           focus:border-indigo focus:bg-ink-950 focus:ring-indigo/25;
+  }
+}
+
+@utility label {
+  @apply mb-1 block text-sm font-semibold text-slate-700;
+
+  .dark & {
+    @apply text-ink-400;
+  }
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2
+         text-sm font-bold transition
+         disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+@utility btn-primary {
+  @apply btn bg-brand-500 text-white hover:bg-brand-600 active:bg-brand-700;
+
+  .dark & {
+    @apply bg-indigo text-white hover:brightness-110;
+  }
+}
+
+@utility btn-secondary {
+  @apply btn border border-slate-300 bg-white text-slate-700 hover:bg-slate-50;
+
+  .dark & {
+    @apply border-slate-600 bg-ink-900 text-ink-50 hover:bg-slate-700;
+  }
+}
+
+@utility btn-danger {
+  @apply btn border border-red-300 bg-white text-red-600 hover:bg-red-50;
+
+  .dark & {
+    @apply border-red-500/50 bg-transparent text-red-400 hover:bg-red-500/10;
+  }
+}
+
+@utility btn-ghost {
+  @apply btn text-slate-600 hover:bg-slate-100;
+
+  .dark & {
+    @apply text-ink-400 hover:bg-slate-700;
+  }
+}
+
+@utility chip {
+  @apply inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-bold;
+}

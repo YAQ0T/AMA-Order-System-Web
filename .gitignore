@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# Secrets - never commit these
+.env
+.env.*
+!.env.example
+
+# Runtime logs written by server/utils/orderRequestLogger.js. They contain
+# usernames and IP addresses, so they must never be committed.
+logs/
+*.jsonl

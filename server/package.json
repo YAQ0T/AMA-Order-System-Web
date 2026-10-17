@@ -1,0 +1,28 @@
+{
+  "name": "ama-order-system-web-server",
+  "version": "1.0.0",
+  "description": "Backend API for the AMA Order System web client",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "db:check": "node check-db.js",
+    "db:create": "node create-db.js",
+    "dev:alt-port": "cross-env PORT=3004 nodemon index.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.11.5",
+    "nodemailer": "^7.0.10",
+    "sequelize": "^6.35.1",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "nodemon": "^3.0.1"
+  }
+}
