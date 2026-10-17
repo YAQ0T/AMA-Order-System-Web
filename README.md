@@ -175,8 +175,8 @@ and printed from there.
 This is deliberate. jsPDF and pdfmake do not do Arabic shaping, so ligatures
 break and letters render in isolated forms. The browser's layout engine shapes
 Arabic correctly for free, and Ctrl+P → "Save as PDF" still produces a real PDF.
-If you later need server-generated PDFs for email attachments, render the same
-HTML with Puppeteer on the Node side.
+If you later need server-generated PDFs (to send a takers' copy as a Telegram
+document, say), render the same HTML with Puppeteer on the Node side.
 
 ### The `price` trap
 
@@ -281,11 +281,29 @@ Same authorization as `PUT` (admin, the order's own maker, or an assigned taker)
 takers get `409` on a completed order. Each change is written to the order
 history and the activity log, and repeating an unchanged status writes nothing.
 
-**Email policy changed with it.** A taker's `PUT` used to email the maker on
-*every* save — and since every tick was a save, that was one email per item.
-Now the maker is emailed only when a taker changes the **order status** (starts
-or finishes it). Ticks send no email and no in-app notification. A taker adding
-an item or changing a quantity still raises an in-app notification, but no email.
+Ticks create no notification of any kind: a taker ticks every item, so anything
+per-tick would fire once per item. The maker learns of progress when the order
+**status** changes (started / finished), which still goes through `PUT`.
+
+### Email removed entirely
+
+The system sends **no email**. Takers are notified on Telegram (see "Telegram
+notifications for takers" below); makers and accountants get the in-app
+notifications they already had. Removed:
+
+- `utils/email.js` and the `nodemailer` dependency, and `EMAIL_USER` /
+  `EMAIL_PASSWORD` from the config
+- every send: new order and order edits to takers, taker start/finish to the
+  maker, order completed to the accountant
+- `POST /api/orders/bulk-email` and the admin `PUT /api/admin/users/:id/email`,
+  plus the email column on the admin users screen
+- **email addresses from order responses.** Loading or saving an order used to
+  return the maker's and every assigned taker's address to whoever made the
+  request. They are no longer selected at all
+
+The `email` **column** is still in the `Users` table and still in the model, on
+purpose: removing it from the model means one run with `DB_ALTER=true` would
+drop the column and its data. Nothing reads or writes it.
 
 ### Security and operational fixes
 
@@ -302,12 +320,9 @@ an item or changing a quantity still raises an in-app notification, but no email
 7. **Moved the VAPID keys to environment variables.** They were hardcoded in
    `utils/push.js`, including the private key, and are in the Flutter repo's git
    history. Generate a fresh pair with `npx web-push generate-vapid-keys`.
-8. **Email no longer dials Gmail on startup when unconfigured.** It used to
-   connect to smtp.gmail.com on every boot even with blank credentials, print a
-   stack trace, and delay startup. All sends now route through one guard.
-9. **Serves the built client** from `client/dist`, with an SPA fallback.
-10. **Added `GET /api/health`** and `GET /api/notifications/vapid-public-key`.
-11. **Replaced the hardcoded `10.10.10.110` startup log** with real interface
+8. **Serves the built client** from `client/dist`, with an SPA fallback.
+9. **Added `GET /api/health`** and `GET /api/notifications/vapid-public-key`.
+10. **Replaced the hardcoded `10.10.10.110` startup log** with real interface
     detection.
 
 ### Still worth fixing (not changed)
@@ -339,7 +354,7 @@ The web client uses the hyphenated key throughout.
 | `client/` | `npm test` | Unit tests (51) |
 | `server/` | `npm run db:create` | Create the database with utf8mb4 |
 | `server/` | `npm run db:check` | Verify connection, charset and Arabic round-trip |
-| `server/` | `npm run test:integration` | 92 checks against the real server + MySQL, on a throwaway database |
+| `server/` | `npm run test:integration` | 129 checks against the real server + MySQL, on a throwaway database. Add `-- telegram` to run one suite |
 | `server/` | `npm run dev` | API with nodemon |
 | `server/` | `npm start` | API |
 | root | `node tools/mock-api.js` | Fake API, no database |
@@ -376,9 +391,71 @@ mock's latency knob.
 cd client && npm test
 ```
 
+## Telegram notifications for takers
+
+Telegram is **the only way the system reaches a phone** — there is no email.
+It works on iPhone and Android, needs **no HTTPS, no domain and no port
+forwarding** (the server polls Telegram rather than Telegram calling the
+server), and it is free.
+
+### Setting it up (once)
+
+1. In Telegram, open **@BotFather**, send `/newbot`, and pick a name and a
+   username ending in `bot` (e.g. `ama_orders_bot`).
+2. BotFather replies with a token like `123456789:AAH...`. Put it in
+   `server/.env`:
+   ```
+   TELEGRAM_BOT_TOKEN=123456789:AAH...
+   ```
+   Treat it like a password: anyone with it can send messages as your bot.
+3. Optionally set `APP_URL` to the address takers open the system on (e.g.
+   `http://192.168.1.33:6001`) to add an "open the system" button to messages.
+4. Restart the server. The log should say `[telegram] bot @your_bot is ready`.
+
+**Only one running server may use a given bot token.** Telegram hands each
+update to one listener; a second server with the same token gets "conflict"
+errors (the log says so). The integration tests switch Telegram off for exactly
+this reason.
+
+### How a taker links their account
+
+A card at the top of the taker page offers **ربط تيليغرام**. Tapping it shows
+an **فتح تيليغرام** button that opens the bot in the Telegram app; the taker
+taps **Start** (ابدأ) and the card turns green on its own. Behind the scenes
+the button carries a one-time code that is valid for 15 minutes and can only be
+used once.
+
+### What gets sent, and to whom
+
+| Event | Linked taker | Not linked |
+|---|---|---|
+| New order assigned to them | Telegram: "new order" | in-app only |
+| Archived order sent out to them | Telegram: "new order" | in-app only |
+| Maker edits their order | Telegram: "order updated" | in-app only |
+
+Messages list the customer, city, note and items with quantities — **never
+prices**. Orders longer than 15 items are cut off with "and N more".
+
+**An unlinked taker only finds out when they open the app** — the bell and the
+order list, nothing on their phone. That is the cost of having no email, and
+why the "link Telegram" card on the taker page is amber and says so. If a taker
+blocks the bot, or Telegram reports their chat gone, they are unlinked
+automatically so the card reappears instead of the system pretending they are
+reachable. Makers and accountants are not on Telegram; they get in-app
+notifications only.
+
+Implementation: `server/utils/telegram.js` (bot, polling, messages),
+`server/routes/telegram.js` (link / unlink / status), the `TelegramLinks` table,
+and `client/src/components/TelegramLinkCard.jsx`.
+
 ## Web push
 
-Optional. Needs VAPID keys in `server/.env` and a **secure context** in the
-browser: `https://` or `localhost`. A plain `http://192.168.x.x` LAN address
-will not work — service workers and the Notification API are refused there.
-Without push the app is otherwise identical; in-app notifications still poll.
+**Switched off in the UI.** In real use it was unreliable on the phones that
+matter: Samsung puts the browser to sleep to save battery, and iPhone only
+allows it from a home-screen web app. Takers use Telegram instead. The plumbing
+is still in place (`OFFER_BROWSER_PUSH` in `NotificationBell.jsx`) if you want
+to revisit it, e.g. for desktop users once the site is on HTTPS.
+
+If you do: it needs VAPID keys in `server/.env` and a **secure context** in the
+browser — `https://` or `localhost`. A plain `http://192.168.x.x` address will
+not work.

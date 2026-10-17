@@ -100,6 +100,22 @@ export const T = {
   pushServerDisabled: 'الإشعارات غير مفعّلة على الخادم',
   pushFailed: 'تعذّر تفعيل الإشعارات',
 
+  // Telegram
+  telegramPromptTitle: 'استلم الطلبات على تيليغرام',
+  telegramPromptBody: 'بدون الربط لن تعرف بالطلبات الجديدة إلا عند فتح النظام. اربط حسابك مرة واحدة لتصلك فوراً على هاتفك.',
+  telegramLink: 'ربط تيليغرام',
+  telegramStep1: 'افتح تيليغرام',
+  telegramOpen: 'فتح تيليغرام',
+  telegramStep2: 'اضغط «ابدأ» (Start) داخل المحادثة',
+  telegramWaiting: 'بانتظار التأكيد من تيليغرام…',
+  telegramFallback: 'لم يُفتح التطبيق؟ اضغط هنا',
+  telegramNeedApp: 'يجب أن يكون تطبيق تيليغرام مثبتاً على هاتفك.',
+  telegramLinked: 'الطلبات تصلك على تيليغرام',
+  telegramUnlink: 'فك الربط',
+  telegramLinkedToast: 'تم ربط تيليغرام بنجاح',
+  telegramUnlinkedToast: 'تم فك الربط. لن تصلك الطلبات على هاتفك بعد الآن.',
+  telegramExpired: 'انتهت صلاحية الرابط. اضغط «ربط تيليغرام» مرة أخرى.',
+
   // Tabs
   active: 'النشطة',
   archived: 'المؤرشفة',
@@ -189,8 +205,6 @@ export const T = {
   recentActivity: 'آخر النشاطات',
   approve: 'موافقة',
   approved: 'تمت الموافقة',
-  email: 'البريد الإلكتروني',
-  setEmail: 'تعيين البريد',
   deleteUser: 'حذف المستخدم',
   noPending: 'لا توجد طلبات موافقة معلّقة',
   usersByRole: 'المستخدمون حسب الدور',

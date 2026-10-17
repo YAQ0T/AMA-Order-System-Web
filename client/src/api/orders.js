@@ -94,10 +94,6 @@ export async function deleteOrder(id) {
   return api.delete(`/api/orders/${id}`);
 }
 
-export async function sendBulkEmail(orderIds, takerIds) {
-  return api.post('/api/orders/bulk-email', { orderIds, takerIds });
-}
-
 const suggestionSchema = z.array(z.string());
 
 export async function suggestItems(q, signal) {

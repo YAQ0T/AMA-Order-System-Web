@@ -168,8 +168,7 @@ export default function MakerArchived() {
     setSending(true);
     try {
       // The server has no bulk status endpoint, so this is one PUT per order.
-      // skipEmail suppresses the per-order email; the assignment emails are
-      // still sent by the server when the order moves to pending.
+      // Each order moving to pending sends its takers one Telegram message.
       for (const order of selectedOrders) {
         await updateOrder.mutateAsync({
           id: order.id,

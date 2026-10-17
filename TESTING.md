@@ -77,7 +77,7 @@ Against the mock, driving the real UI:
 
 ## Verified against the real server and MySQL 26.7
 
-Run with `npm run test:integration` in `server/` (see below). It creates a
+Run with `npm run test:integration` in `server/` — 129 checks across three suites. It creates a
 throwaway database, runs everything against the real routes and real MySQL, and
 drops it afterwards — your own database is never touched.
 
@@ -102,6 +102,13 @@ drops it afterwards — your own database is never touched.
 | Archived | Create without assignment, activation guard, send, delete |
 | UI | Real browser on the real server: 5 rapid taps → 5 single-item calls, all saved |
 | UI | Maker's edit window open while another taker unticks: the untick survives |
+| **Telegram** | Run against a fake Telegram API (`server/test/fake-telegram.js`) that the server cannot tell apart from the real one |
+| Telegram linking | One-time 24-char code; works once; ignored in group chats; invalid code and stray messages get Arabic replies |
+| Telegram messages | Exactly one per event; customer, city, items, quantities; **no prices** (a deliberate price leak fails the suite) |
+| Telegram safety | Typed-in HTML escaped; a rejected button falls back to a plain message; 17-item order says "and 2 more" |
+| Telegram routing | Only linked takers are messaged; sending out an archived order sends "new order", not also "updated"; a taker's own actions send nothing |
+| Telegram lifecycle | Unlink from the app; blocking the bot unlinks automatically; deleting a linked user works |
+| Telegram UI | Real browser: link → open Telegram → Start → card turns green on its own, with toasts for link and unlink |
 
 ---
 
@@ -109,27 +116,29 @@ drops it afterwards — your own database is never touched.
 
 These cannot be checked without your real environment. Roughly in order of risk.
 
-### 1. Email — the one that can embarrass you
+### 1. Telegram with a real bot and real phones
 
-**Nothing in my testing sent a single email.** The server sends on order create,
-order update, and bulk send. Before real use:
+Everything was verified against a fake Telegram API; the real one has not been
+touched yet. Create the bot (README → "Telegram notifications for takers"), then:
 
-1. Set `EMAIL_USER` / `EMAIL_PASSWORD` in `server/.env` (Gmail needs an App
-   Password, not the account password)
-2. Create one order assigned to a taker **whose email is your own**
-3. Confirm the mail arrives, and that the Arabic renders correctly in the mail
-   client — not just the browser
+1. As a taker on an **iPhone**: open the system in Safari, tap **ربط تيليغرام**,
+   then **فتح تيليغرام**. Telegram should open straight on the bot. Tap Start.
+   The card in the system should turn green within a few seconds.
+2. Do the same on a **Samsung**.
+3. As the maker, create an order assigned to both. Each phone should get the
+   message with the phone **locked** and Telegram **closed** — that is the case
+   web push kept failing.
+4. If **فتح تيليغرام** does nothing on a phone, try the "لم يُفتح التطبيق؟" link
+   under it and tell me which phone it was.
 
-Then test bulk send with **two** archived orders, not ten. Bulk send is one PUT
-per order, so ten orders is ten emails. Check whether takers want one mail per
-order or one digest; the server has a `/api/orders/bulk-email` endpoint for the
-digest shape that the web client does not currently call.
+### 2. Every taker is actually linked
 
-Also check the maker email policy behaves as agreed: ticking items should send
-**nothing**; the maker should get one email when a taker **starts** the order and
-one when they **finish** it.
+There is no email any more, so a taker who has not linked Telegram gets
+**nothing on their phone** — they only see new orders when they open the app.
+Before relying on it, log in as each taker once and make sure the card at the
+top of their page is green ("الطلبات تصلك على تيليغرام").
 
-### 2. Printing on your actual printer
+### 3. Printing on your actual printer
 
 I verified the print HTML renders correctly on screen. I could not verify paper.
 
@@ -142,7 +151,7 @@ I verified the print HTML renders correctly on screen. I could not verify paper.
 - Print an order with 20+ items to check the page break and that the table
   header repeats
 
-### 3. Two real devices on the LAN
+### 4. Two real devices on the LAN
 
 Two takers ticking the same order is **fixed and verified** against MySQL (see
 the table above). What is left is the human version: two phones on your
@@ -155,22 +164,19 @@ adding an item within the same second. Those still go through `PUT`, which
 replaces the whole item list, so one of the two additions can be lost. Ticks are
 not affected. See the end of this file.
 
-### 4. Web push
+### 5. Web push — nothing to test
 
-Needs HTTPS and real VAPID keys. `http://192.168.x.x` will **not** work —
-browsers refuse service workers outside a secure context.
+Switched off in the UI after it proved unreliable on Samsung and iPhone;
+takers use Telegram instead. Only relevant if you turn `OFFER_BROWSER_PUSH`
+back on, in which case it needs HTTPS and VAPID keys (see README).
 
-1. `npx web-push generate-vapid-keys` → `server/.env`
-2. Serve over HTTPS or test on `localhost`
-3. Bell menu → "تفعيل إشعارات المتصفح"
-
-### 5. Scale
+### 6. Scale
 
 Everything was tested with 47 orders. Reports page through the **entire**
 history 20 rows at a time, so at a few thousand orders expect it to crawl. Test
 with a realistic year of data before trusting the Reports tab.
 
-### 6. The Arabic itself
+### 7. The Arabic itself
 
 I am not a native speaker and I guessed at your internal terminology. Sit a
 maker and a taker in front of it for ten minutes. In particular:
@@ -180,12 +186,12 @@ maker and a taker in front of it for ten minutes. In particular:
 - `تم التجهيز` vs `غير متوفر` for item statuses
 - Whether `حفظ كمؤرشف` reads as "save as draft" to them
 
-### 7. F3 and F7
+### 8. F3 and F7
 
 Ask a maker whether stealing these from the browser feels right. F3 is normally
 Find and F7 toggles caret browsing in Firefox.
 
-### 8. Their actual browsers and devices
+### 9. Their actual browsers and devices
 
 Tested in one Chromium engine at desktop width. Check whatever your staff
 actually use, and a phone if takers work from one.

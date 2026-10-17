@@ -29,7 +29,6 @@ export const userSchema = z
     role: z.string().default(''),
     isApproved: z.boolean().optional(),
     approved: z.boolean().optional(),
-    email: z.string().nullable().optional(),
     prefersDark: z.boolean().optional(),
     createdAt: z.string().nullable().optional(),
     approvedAt: z.string().nullable().optional(),
@@ -38,7 +37,6 @@ export const userSchema = z
     ...u,
     isApproved: u.isApproved ?? u.approved ?? false,
     prefersDark: u.prefersDark ?? false,
-    email: u.email ?? null,
   }));
 
 export const orderItemSchema = z.object({

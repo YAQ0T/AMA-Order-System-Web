@@ -10,6 +10,7 @@ import * as ordersApi from '../../api/orders';
 import { T } from '../../lib/labels';
 import { parseNumber, formatQuantity } from '../../lib/format';
 import ItemNameInput from '../../components/ItemNameInput';
+import TelegramLinkCard from '../../components/TelegramLinkCard';
 
 const PAGE_SIZE = 20;
 
@@ -234,6 +235,8 @@ export default function TakerDashboard() {
 
   return (
     <div>
+      <TelegramLinkCard />
+
       <OrderFilters
         status={status}
         onStatusChange={(value) => {

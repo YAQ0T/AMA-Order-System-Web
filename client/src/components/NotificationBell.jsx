@@ -7,6 +7,18 @@ import { useToast } from './Toast';
 import { T } from '../lib/labels';
 import { formatDateTime } from '../lib/format';
 
+/**
+ * Browser push is switched OFF. In real use it proved unreliable on the
+ * phones that matter: Samsung puts the browser to sleep to save battery, and
+ * iPhone only allows it from a home-screen web app. Takers get new orders on
+ * Telegram instead (see TelegramLinkCard). Offering a control that usually
+ * fails would only teach people to ignore notifications.
+ *
+ * The plumbing is kept so this can be revisited, e.g. for desktop users once
+ * the site is served over HTTPS.
+ */
+const OFFER_BROWSER_PUSH = false;
+
 const PUSH_MESSAGES = {
   subscribed: T.pushSubscribed,
   denied: T.pushDenied,
@@ -22,7 +34,7 @@ export default function NotificationBell() {
   const toast = useToast();
 
   // Only offer the control when it could actually work and hasn't been answered.
-  const canOfferPush = pushSupported() && Notification.permission === 'default';
+  const canOfferPush = OFFER_BROWSER_PUSH && pushSupported() && Notification.permission === 'default';
 
   const turnOnPush = async () => {
     const result = await enablePush();

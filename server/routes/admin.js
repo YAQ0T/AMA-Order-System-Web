@@ -28,7 +28,7 @@ router.get('/users', async (req, res) => {
 
         const users = await User.findAll({
             where,
-            attributes: ['id', 'username', 'email', 'role', 'isApproved', 'approvedBy', 'approvedAt', 'createdAt'],
+            attributes: ['id', 'username', 'role', 'isApproved', 'approvedBy', 'approvedAt', 'createdAt'],
             include: [{
                 model: User,
                 as: 'Approver',
@@ -101,43 +101,6 @@ router.put('/users/:id/approve', async (req, res) => {
     }
 });
 
-// Update user email
-router.put('/users/:id/email', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { email } = req.body;
-
-        const user = await User.findByPk(id);
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        // Validate email format if provided
-        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-            return res.status(400).json({ error: 'Invalid email format' });
-        }
-
-        user.email = email || null;
-        await user.save();
-
-        await logActivity(req.user.id, 'user_email_updated', 'user', user.id, {
-            username: user.username,
-            newEmail: email
-        }, req.ip);
-
-        res.json({
-            message: 'Email updated successfully',
-            user: {
-                id: user.id,
-                username: user.username,
-                email: user.email
-            }
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
 // Delete a user
 router.delete('/users/:id', async (req, res) => {
     try {
@@ -165,9 +128,10 @@ router.delete('/users/:id', async (req, res) => {
             await user.setAssignedOrders([]);
         }
 
-        // 2. Delete PushSubscriptions
-        const { PushSubscription, Notification } = require('../db');
+        // 2. Delete PushSubscriptions and the Telegram link
+        const { PushSubscription, Notification, TelegramLink } = require('../db');
         await PushSubscription.destroy({ where: { userId: id } });
+        await TelegramLink.destroy({ where: { userId: id } });
 
         // 3. Delete Notifications
         await Notification.destroy({ where: { userId: id } });

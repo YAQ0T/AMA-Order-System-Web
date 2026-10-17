@@ -78,10 +78,12 @@ const sanitizeItems = (items, { allowEmpty = false } = {}) => {
 };
 
 const buildOrderIncludes = (role, options = {}) => {
-    const { includeHistory = false, includeEmails = false, makerAttrs, assignedTakerAttrs, historyLimit } = options;
+    const { includeHistory = false, makerAttrs, assignedTakerAttrs, historyLimit } = options;
 
-    const makerAttributes = makerAttrs || (includeEmails ? ['id', 'username', 'role', 'email'] : ['id', 'username', 'role']);
-    const assignedAttributes = assignedTakerAttrs || (includeEmails ? ['id', 'username', 'email'] : ['id', 'username']);
+    // Email addresses are never included: nothing sends email any more, and
+    // these objects are returned to every client that loads an order.
+    const makerAttributes = makerAttrs || ['id', 'username', 'role'];
+    const assignedAttributes = assignedTakerAttrs || ['id', 'username'];
     const accounterAttributes = ['id', 'username', 'role'];
 
     const includes = [

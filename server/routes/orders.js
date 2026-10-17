@@ -2,7 +2,7 @@ const express = require('express');
 const { Order, User, OrderItem, OrderLog, Notification, sequelize } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 const { sendPushNotification } = require('../utils/push');
-const { sendOrderCreatedEmail, sendOrderUpdatedEmail, sendOrderUpdatedByTakerEmail, sendBulkOrdersEmail, sendCompletedOrderToAccounterEmail } = require('../utils/email');
+const telegram = require('../utils/telegram');
 const { logActivity } = require('../utils/activityLogger');
 const { logOrderEvent } = require('../utils/orderRequestLogger');
 const { Op } = require('sequelize');
@@ -64,7 +64,6 @@ const summarizeUpdateRequestForLog = (body = {}) => ({
     accounterId: body.accounterId,
     notifyMaker: body.notifyMaker,
     notifyAccounter: body.notifyAccounter,
-    skipEmail: body.skipEmail,
     items: summarizeItemsForLog(body.items)
 });
 
@@ -207,7 +206,6 @@ router.post('/', authenticateToken, async (req, res) => {
         // Fetch complete order with associations for response
         const completeOrder = await Order.findByPk(order.id, {
             include: buildOrderIncludes(req.user.role, {
-                includeEmails: true,
                 makerAttrs: ['id', 'username']
             })
         });
@@ -232,12 +230,14 @@ router.post('/', authenticateToken, async (req, res) => {
             });
         }
 
-        // Send email notifications to assigned takers
+        // Message the assigned takers on Telegram. Anyone who has not linked it
+        // still has the in-app notification created just above.
         if (completeOrder.AssignedTakers && completeOrder.AssignedTakers.length > 0) {
-            const maker = await User.findByPk(req.user.id, { attributes: ['id', 'username', 'email'] });
-            sendOrderCreatedEmail(completeOrder, completeOrder.AssignedTakers, maker).catch(err => {
-                console.error('Error sending order created emails:', err);
-            });
+            const maker = await User.findByPk(req.user.id, { attributes: ['id', 'username'] });
+            telegram.deliverToTakers(completeOrder.AssignedTakers, () => telegram.orderAssignedMessage(completeOrder, maker))
+                .catch(err => {
+                    console.error('Error notifying takers of new order:', err);
+                });
         }
 
         await logActivity(req.user.id, 'order_created', 'order', order.id, {
@@ -324,11 +324,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
             request: summarizeUpdateRequestForLog(req.body)
         });
 
-        const { status, title, description, items, assignedTakerIds, skipEmail, accounterId } = req.body;
-
-        if (skipEmail) {
-            console.log('⏭️ Skipping individual email (bulk send mode)');
-        }
+        const { status, title, description, items, assignedTakerIds, accounterId } = req.body;
 
         // Track which incoming items explicitly included a status field (even if null)
         const statusProvidedByName = new Map();
@@ -355,7 +351,6 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
         let order = await Order.findByPk(req.params.id, {
             include: buildOrderIncludes(req.user.role, {
-                includeEmails: true,
                 makerAttrs: ['id', 'username', 'role'],
                 assignedTakerAttrs: ['id', 'username']
             })
@@ -400,7 +395,6 @@ router.put('/:id', authenticateToken, async (req, res) => {
             }
             order = await Order.findByPk(req.params.id, {
                 include: buildOrderIncludes(req.user.role, {
-                    includeEmails: true,
                     makerAttrs: ['id', 'username', 'role'],
                     assignedTakerAttrs: ['id', 'username']
                 }),
@@ -425,7 +419,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
             transaction = null;
 
             const updatedOrder = await Order.findByPk(order.id, {
-                include: buildOrderIncludes(req.user.role, { includeEmails: true })
+                include: buildOrderIncludes(req.user.role, {})
             });
 
             await logActivity(req.user.id, 'order_status_changed', 'order', order.id, {
@@ -482,7 +476,6 @@ router.put('/:id', authenticateToken, async (req, res) => {
         }
         order = await Order.findByPk(req.params.id, {
             include: buildOrderIncludes(req.user.role, {
-                includeEmails: true,
                 makerAttrs: ['id', 'username', 'role'],
                 assignedTakerAttrs: ['id', 'username']
             }),
@@ -805,7 +798,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
         // Reload to get full data including recent logs
         const updatedOrder = await Order.findByPk(order.id, {
-            include: buildOrderIncludes(req.user.role, { includeHistory: true, includeEmails: true, historyLimit: 5 })
+            include: buildOrderIncludes(req.user.role, { includeHistory: true, historyLimit: 5 })
         });
 
         await logActivity(req.user.id, 'order_updated', 'order', order.id, {
@@ -847,41 +840,26 @@ router.put('/:id', authenticateToken, async (req, res) => {
                 body: `Order #${order.id}: ${order.title || 'Untitled Order'} is ready for review`,
                 url: `/`
             });
-
-            try {
-                const accounter = await User.findByPk(accounterToNotify);
-                if (accounter) {
-                    await sendCompletedOrderToAccounterEmail(updatedOrder, accounter);
-                }
-            } catch (err) {
-                console.error('Error sending accounter notification:', err);
-            }
         }
 
-        // Send email notifications (skip if this is part of bulk send)
-        if (!skipEmail) {
-            const editor = await User.findByPk(req.user.id, { attributes: ['id', 'username', 'email'] });
+        // There is no email. Makers and accountants are told through the
+        // in-app notifications created inside the transaction above.
+        //
+        // When the MAKER changes an order, its takers are messaged on Telegram
+        // (unless it is already entered into ERP). Sending an archived order
+        // out is new work for them, so it gets the "new order" message rather
+        // than "order updated" - one message, not both. Takers who have not
+        // linked Telegram see it in the app's notifications.
+        if (req.user.role === 'maker' && updatedOrder.AssignedTakers && updatedOrder.AssignedTakers.length > 0 && updatedOrder.status !== 'entered_erp') {
+            const editor = await User.findByPk(req.user.id, { attributes: ['id', 'username'] });
+            const isSendOut = takersToNotifyOnResend.length > 0;
+            const buildText = isSendOut
+                ? () => telegram.orderAssignedMessage(updatedOrder, editor)
+                : () => telegram.orderUpdatedMessage(updatedOrder, editor);
 
-            // Get recent changes for email
-            const recentChanges = updatedOrder.History?.slice(0, 5) || [];
-
-            // If Maker updated, notify Takers (unless status is entered_erp)
-            if (req.user.role === 'maker' && updatedOrder.AssignedTakers && updatedOrder.AssignedTakers.length > 0 && updatedOrder.status !== 'entered_erp') {
-                sendOrderUpdatedEmail(updatedOrder, updatedOrder.AssignedTakers, editor, recentChanges).catch(err => {
-                    console.error('Error sending order updated emails to takers:', err);
-                });
-            }
-
-            // If a Taker changed the ORDER status (started / finished it), email
-            // the Maker. Only then: item ticks used to come through here too,
-            // which emailed the maker once per item. Ticks now use
-            // PATCH /api/orders/:id/items/status, and a taker adding an item or
-            // editing a quantity still raises an in-app notification above.
-            if (req.user.role === 'taker' && updatedOrder.Maker && changeSummary.includes('status')) {
-                sendOrderUpdatedByTakerEmail(updatedOrder, updatedOrder.Maker, editor, recentChanges).catch(err => {
-                    console.error('Error sending order updated email to maker:', err);
-                });
-            }
+            telegram.deliverToTakers(updatedOrder.AssignedTakers, buildText).catch(err => {
+                console.error('Error notifying takers of order update:', err);
+            });
         }
 
         res.json(updatedOrder);
@@ -959,7 +937,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
         }
 
         const order = await Order.findByPk(req.params.id, {
-            include: buildOrderIncludes(req.user.role, { includeEmails: false, includeHistory: false })
+            include: buildOrderIncludes(req.user.role, { includeHistory: false })
         });
 
         if (!order) {
@@ -996,54 +974,6 @@ router.delete('/:id', authenticateToken, async (req, res) => {
                 stack: error.stack
             }
         });
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// POST /api/orders/bulk-email - Send bulk email notifications
-router.post('/bulk-email', authenticateToken, async (req, res) => {
-    try {
-        const { orderIds, takerIds } = req.body;
-
-        if (!orderIds || !takerIds || orderIds.length === 0 || takerIds.length === 0) {
-            return res.status(400).json({ error: 'orderIds and takerIds are required' });
-        }
-
-        // Fetch all orders with their items
-        const orders = await Order.findAll({
-            where: { id: orderIds },
-            include: buildOrderIncludes(req.user.role, { includeEmails: true })
-        });
-
-        console.log(`Bulk email: Found ${orders.length} orders for ${orderIds.length} order IDs`);
-        orders.forEach((order, i) => {
-            console.log(`Order ${i + 1}: ${order.title}, Items: ${order.Items?.length || 0}`);
-        });
-
-        // Get sender info
-        const sender = await User.findByPk(req.user.id, { attributes: ['id', 'username', 'email'] });
-
-        // Get all takers
-        const takers = await User.findAll({
-            where: { id: takerIds },
-            attributes: ['id', 'username', 'email']
-        });
-
-        console.log(`Sending bulk email to ${takers.length} takers`);
-
-        // Send one email per taker with all their orders
-        for (const taker of takers) {
-            if (taker.email) {
-                console.log(`Sending bulk email to ${taker.email} with ${orders.length} orders`);
-                sendBulkOrdersEmail(orders, taker, sender).catch(err => {
-                    console.error(`Error sending bulk email to ${taker.email}:`, err);
-                });
-            }
-        }
-
-        res.json({ message: 'Bulk emails sent successfully', count: takers.length });
-    } catch (error) {
-        console.error('Error sending bulk emails:', error);
         res.status(500).json({ error: error.message });
     }
 });

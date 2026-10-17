@@ -21,6 +21,10 @@ module.exports = (sequelize) => {
             defaultValue: false,
             allowNull: false
         },
+        // UNUSED: the system no longer sends email, and nothing reads or
+        // writes this. It stays in the model on purpose - remove it and a
+        // single run with DB_ALTER=true would have Sequelize DROP the column,
+        // destroying whatever addresses are stored in it.
         email: {
             type: DataTypes.STRING,
             allowNull: true,

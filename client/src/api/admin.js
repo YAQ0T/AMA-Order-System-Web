@@ -30,10 +30,6 @@ export async function approveUser(id) {
   return api.put(`/api/admin/users/${id}/approve`, {});
 }
 
-export async function updateUserEmail(id, email) {
-  return api.put(`/api/admin/users/${id}/email`, { email });
-}
-
 export async function deleteUser(id) {
   return api.delete(`/api/admin/users/${id}`);
 }

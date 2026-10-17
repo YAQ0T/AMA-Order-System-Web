@@ -6,61 +6,6 @@ import { T, roleLabel } from '../../lib/labels';
 import { ConfirmDialog, EmptyState, ErrorState, Ltr, Spinner } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 
-function EmailCell({ user, onSave, busy }) {
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(user.email || '');
-
-  if (!editing) {
-    return (
-      <div className="flex items-center gap-2">
-        <span dir="ltr" className="text-xs text-slate-500 dark:text-ink-400">
-          {user.email || '—'}
-        </span>
-        <button
-          type="button"
-          className="text-xs font-bold text-brand-600 hover:underline dark:text-indigo"
-          onClick={() => {
-            setValue(user.email || '');
-            setEditing(true);
-          }}
-        >
-          {T.edit}
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <form
-      className="flex items-center gap-1"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        await onSave(value.trim());
-        setEditing(false);
-      }}
-    >
-      <input
-        dir="ltr"
-        type="email"
-        className="input py-1 text-xs"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        autoFocus
-      />
-      <button type="submit" className="btn-primary px-2 py-1 text-xs" disabled={busy}>
-        {T.save}
-      </button>
-      <button
-        type="button"
-        className="btn-ghost px-2 py-1 text-xs"
-        onClick={() => setEditing(false)}
-      >
-        {T.cancel}
-      </button>
-    </form>
-  );
-}
-
 export default function AdminUsers() {
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -80,15 +25,6 @@ export default function AdminUsers() {
     mutationFn: adminApi.approveUser,
     onSuccess: () => {
       toast.success(T.approved);
-      invalidate();
-    },
-    onError: (err) => toast.error(err?.message || T.somethingWentWrong),
-  });
-
-  const setEmail = useMutation({
-    mutationFn: ({ id, email }) => adminApi.updateUserEmail(id, email),
-    onSuccess: () => {
-      toast.success(T.save);
       invalidate();
     },
     onError: (err) => toast.error(err?.message || T.somethingWentWrong),
@@ -164,7 +100,6 @@ export default function AdminUsers() {
               <tr className="border-b border-slate-200 text-xs text-slate-500 dark:border-slate-700 dark:text-ink-400">
                 <th className="py-2 text-start font-bold">{T.username}</th>
                 <th className="py-2 text-start font-bold">{T.role}</th>
-                <th className="py-2 text-start font-bold">{T.email}</th>
                 <th className="py-2 text-start font-bold">{T.status}</th>
                 <th className="py-2 text-start font-bold">{T.actions}</th>
               </tr>
@@ -177,13 +112,6 @@ export default function AdminUsers() {
                 >
                   <td className="py-2 font-bold">{user.username}</td>
                   <td className="py-2">{roleLabel(user.role)}</td>
-                  <td className="py-2">
-                    <EmailCell
-                      user={user}
-                      busy={setEmail.isPending}
-                      onSave={(email) => setEmail.mutateAsync({ id: user.id, email })}
-                    />
-                  </td>
                   <td className="py-2">
                     {user.isApproved ? (
                       <span className="chip bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300">

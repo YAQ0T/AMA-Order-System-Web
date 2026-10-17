@@ -291,5 +291,40 @@ console.log('\nAdmin');
   ok(notAdmin.status === 403, 'taker cannot reach admin endpoints', `got ${notAdmin.status}`);
 }
 
+// ---------------------------------------------------------------- email is gone
+console.log('\nEmail removed');
+{
+  const bulk = await call('POST', '/api/orders/bulk-email', { token: maker, body: { orderIds: [1], takerIds: [1] } });
+  ok(bulk.status === 404, 'the bulk-email endpoint no longer exists', `got ${bulk.status}`);
+  const users = await call('GET', '/api/admin/users', { token: admin });
+  const setEmail = await call('PUT', `/api/admin/users/${users.data[0].id}/email`, { token: admin, body: { email: 'a@b.co' } });
+  ok(setEmail.status === 404, 'the admin set-email endpoint no longer exists', `got ${setEmail.status}`);
+  ok(users.data.every((u) => !('email' in u)), 'the admin user list carries no email addresses');
+
+  // Orders used to return the maker's and every taker's email address to
+  // whoever loaded them. Check both the list and an update response.
+  const list = await call('GET', '/api/orders/maker?status=all', { token: maker });
+  const people = list.data.orders.flatMap((o) => [o.Maker, o.Accounter, ...(o.AssignedTakers || [])]).filter(Boolean);
+  ok(people.length > 0 && people.every((p) => !('email' in p)), `order lists expose no email addresses (${people.length} people checked)`);
+  const fresh = await call('POST', '/api/orders', {
+    token: maker,
+    body: { title: 'خصوصية', city: 'نابلس', items: [{ name: 'شاي', quantity: 1, price: 1 }], assignedTakerIds: [taker1Id], accounterId: acc1Id },
+  });
+  ok([fresh.data?.Maker, ...(fresh.data?.AssignedTakers || [])].filter(Boolean).every((p) => !('email' in p)),
+    'a create response exposes no email addresses');
+  const upd = await call('PUT', `/api/orders/${fresh.data.id}`, { token: maker, body: { description: 'فحص الخصوصية' } });
+  const inUpdate = [upd.data?.Maker, ...(upd.data?.AssignedTakers || [])].filter(Boolean);
+  ok(upd.status === 200 && inUpdate.length > 0 && inUpdate.every((p) => !('email' in p)), 'an update response exposes no email addresses either');
+}
+
+// ---------------------------------------------------------------- telegram off
+console.log('\nTelegram with no bot configured');
+{
+  const s = await call('GET', '/api/telegram/status', { token: taker });
+  ok(s.status === 200 && s.data?.enabled === false, 'status reports the feature as off (the app hides the card)');
+  const l = await call('POST', '/api/telegram/link', { token: taker });
+  ok(l.status === 503, 'asking for a link gets 503, not a crash', `got ${l.status}`);
+}
+
 console.log(`\n  ${passed} passed, ${failed} failed\n`);
 process.exit(failed ? 1 : 0);

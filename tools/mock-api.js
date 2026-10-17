@@ -30,12 +30,12 @@ const delay = () => (LATENCY ? new Promise((r) => setTimeout(r, LATENCY)) : Prom
 const CITIES = ['نابلس', 'الخليل', 'جنين', 'طولكرم', 'بديا', 'قلقيليا', 'رامالله', 'بيت لحم', 'الداخل'];
 
 const users = [
-  { id: 1, username: 'admin', role: 'admin', isApproved: true, email: 'admin@example.com', prefersDark: false },
-  { id: 2, username: 'maker1', role: 'maker', isApproved: true, email: 'maker@example.com', prefersDark: false },
-  { id: 3, username: 'taker1', role: 'taker', isApproved: true, email: 'taker@example.com', prefersDark: false },
-  { id: 4, username: 'taker2', role: 'taker', isApproved: true, email: null, prefersDark: false },
-  { id: 5, username: 'acc1', role: 'accounter', isApproved: true, email: 'acc@example.com', prefersDark: false },
-  { id: 6, username: 'newbie', role: 'maker', isApproved: false, email: null, prefersDark: false },
+  { id: 1, username: 'admin', role: 'admin', isApproved: true, prefersDark: false },
+  { id: 2, username: 'maker1', role: 'maker', isApproved: true, prefersDark: false },
+  { id: 3, username: 'taker1', role: 'taker', isApproved: true, prefersDark: false },
+  { id: 4, username: 'taker2', role: 'taker', isApproved: true, prefersDark: false },
+  { id: 5, username: 'acc1', role: 'accounter', isApproved: true, prefersDark: false },
+  { id: 6, username: 'newbie', role: 'maker', isApproved: false, prefersDark: false },
 ];
 
 const PRODUCTS = ['طحينة', 'زيت زيتون', 'أرز بسمتي', 'سكر', 'حليب', 'جبنة بيضاء', 'زعتر', 'عدس', 'برغل', 'شاي'];
@@ -231,7 +231,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/auth/register' && req.method === 'POST') {
     const { username, role } = await readBody();
-    const created = { id: users.length + 1, username, role, isApproved: false, email: null, prefersDark: false };
+    const created = { id: users.length + 1, username, role, isApproved: false, prefersDark: false };
     users.push(created);
     return send(201, { message: 'User created successfully', requiresApproval: true });
   }
@@ -417,6 +417,15 @@ const server = http.createServer(async (req, res) => {
     return send(200, forRole(order, user.role));
   }
 
+  // ---- telegram ----
+  // The mock has no bot, so report the feature as off; the client then hides
+  // the "link Telegram" card. The real flow is covered by
+  // server/test/telegram.test.mjs against a fake Telegram API.
+  if (pathname === '/api/telegram/status') {
+    if (needsAuth()) return undefined;
+    return send(200, { enabled: false, botUsername: null, linked: false, telegramUsername: null, linkedAt: null });
+  }
+
   // ---- items ----
   if (pathname === '/api/items/suggestions') {
     if (needsAuth()) return undefined;
@@ -468,13 +477,6 @@ const server = http.createServer(async (req, res) => {
     const u = users.find((x) => x.id === id);
     if (u) u.isApproved = true;
     return send(200, { message: 'approved' });
-  }
-  if (/^\/api\/admin\/users\/\d+\/email$/.test(pathname)) {
-    const id = Number(pathname.split('/')[4]);
-    const { email } = await readBody();
-    const u = users.find((x) => x.id === id);
-    if (u) u.email = email;
-    return send(200, { message: 'ok' });
   }
   if (/^\/api\/admin\/users\/\d+$/.test(pathname) && req.method === 'DELETE') {
     const id = Number(pathname.split('/')[4]);

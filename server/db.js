@@ -54,6 +54,7 @@ const Notification = require('./models/Notification')(sequelize);
 const PushSubscription = require('./models/PushSubscription')(sequelize);
 const OrderAssignments = require('./models/OrderAssignments')(sequelize);
 const ActivityLog = require('./models/ActivityLog')(sequelize);
+const TelegramLink = require('./models/TelegramLink')(sequelize);
 
 // Associations
 // User <-> Order (Maker)
@@ -96,4 +97,8 @@ ActivityLog.belongsTo(User, { as: 'User', foreignKey: 'userId' });
 User.belongsTo(User, { as: 'Approver', foreignKey: 'approvedBy' });
 User.hasMany(User, { as: 'ApprovedUsers', foreignKey: 'approvedBy' });
 
-module.exports = { sequelize, User, Order, OrderItem, OrderLog, Notification, PushSubscription, ActivityLog, OrderAssignments };
+// User <-> TelegramLink (one Telegram chat per user, for notifications)
+User.hasOne(TelegramLink, { foreignKey: 'userId', onDelete: 'CASCADE' });
+TelegramLink.belongsTo(User, { foreignKey: 'userId' });
+
+module.exports = { sequelize, User, Order, OrderItem, OrderLog, Notification, PushSubscription, ActivityLog, OrderAssignments, TelegramLink };

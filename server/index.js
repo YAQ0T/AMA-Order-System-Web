@@ -171,9 +171,24 @@ const syncDatabase = async () => {
     } catch (error) {
         console.error('Failed to seed admin user:', error.message);
     }
+
+    // 6) Telegram bot. Started only once the database is ready, because it
+    //    writes link records as soon as a taker taps Start.
+    telegram.start();
 };
 
+const telegram = require('./utils/telegram');
+
 syncDatabase();
+
+// Stop long-polling cleanly so a restart does not leave a stale connection
+// that makes Telegram report "another program is receiving updates".
+for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => {
+        telegram.stop();
+        process.exit(0);
+    });
+}
 
 // Routes
 const authRoutes = require('./routes/auth');
@@ -195,6 +210,7 @@ app.use('/api/orders', orderAccounterRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/items', require('./routes/items'));
+app.use('/api/telegram', require('./routes/telegram'));
 
 // Health check (handy for checking the API is reachable from a browser/LAN device)
 app.get('/api/health', (req, res) => {
