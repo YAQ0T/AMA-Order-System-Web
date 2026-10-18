@@ -25,6 +25,9 @@ AMA-Order-System-Web/
 | **Start AMA (Windows).cmd** / **Start AMA (Mac).command** | بيشغّل النظام وبيفتحه بالمتصفح، وبيكتب العنوان اللي بتفتحوه من التلفونات |
 | **Stop AMA (Windows).cmd** / **Stop AMA (Mac).command** | بيطفي النظام |
 | **Restore AMA (Windows).cmd** / **Restore AMA (Mac).command** | بيرجّع البيانات من نسخة احتياطية (بياخد نسخة أمان من الوضع الحالي قبل أي تغيير) |
+| **Autostart AMA (Windows).cmd** / **Autostart AMA (Mac).command** | بيشغّل/بيلغي تشغيل النظام لحاله مع تسجيل الدخول للجهاز |
+
+**الوصول من أي مكان بالعالم** (والنظام على جهاز الشركة): شوف **[ONLINE-ACCESS.md](ONLINE-ACCESS.md)** — رابط https ثابت عن طريق Cloudflare Tunnel، بدون فتح بورتات، وفيه كمان نقل النظام بين الماك والويندوز وإيقاف النظام القديم.
 
 - بعد ما يشتغل بتقدر تسكّر النافذة السوداء — النظام بيضل شغّال.
 - أول مرة: إذا ما في ملف `server/.env` بينعمل لحاله وبينفتح، حط كلمة سر MySQL فيه وشغّل Start AMA مرة ثانية.
@@ -38,10 +41,27 @@ The same in English: **Start AMA** checks Node, creates `server/.env` on first
 run (with a random `JWT_SECRET`), installs packages and builds the web client
 when needed, starts the server in the background, waits until the database is
 ready, opens the browser and prints the phone address. If MySQL is down it says
-so in plain words and leaves nothing running. **Stop AMA** stops it (by its pid
-in `.ama_runtime/`, or whatever Node process holds the port). The server's
-output goes to `.ama_runtime/server.log`. Set `AMA_NO_BROWSER=1` to skip
-opening a browser (a screenless server).
+so in plain words and leaves nothing running; a missing database is created.
+**Stop AMA** stops it (by its pid in `.ama_runtime/`, or whatever Node process
+holds the port). The server's output goes to `.ama_runtime/server.log`. Set
+`AMA_NO_BROWSER=1` to skip opening a browser (a screenless server).
+
+When `APP_URL` is an online link (see ONLINE-ACCESS.md), Start AMA refuses to
+start if that link is already answered by another computer - two copies would
+mean two separate databases - and afterwards checks the link reaches *this*
+server (each start has a random `instance` id in `/api/health`). On a Mac it
+keeps the machine awake while the server runs (`caffeinate -w`). **Autostart
+AMA** adds a login item (Mac: `~/Library/LaunchAgents/com.ama.ordersystem.plist`;
+Windows: a script in the Startup folder).
+
+**Outside access only through a tunnel or VPN.** The server answers only the
+local network and the computer itself (`server/middleware/lanOnly.js`, judged
+by the TCP connection, never by headers); a direct connection from a public
+address - a forwarded router port - gets 403. For connections from the computer
+itself (where cloudflared delivers visitors) the visitor's address is taken from
+`X-Forwarded-For` (`trust proxy: loopback`), so login throttling counts each
+visitor, and outside sign-ups are limited to 5 an hour per address. No CORS
+headers are sent unless `CORS_ORIGINS` lists an origin.
 
 ---
 
@@ -485,7 +505,7 @@ The web client uses the hyphenated key throughout.
 | `server/` | `npm run db:check` | Verify connection, charset and Arabic round-trip |
 | `server/` | `npm run db:backup` | Take a backup now |
 | `server/` | `npm run db:restore` | Restore a backup (stop the system first) |
-| `server/` | `npm run test:integration` | 329 checks in 6 suites against the real server + MySQL, on a throwaway database. Add `-- <name>` to run one suite, e.g. `-- security` |
+| `server/` | `npm run test:integration` | 346 checks in 6 suites against the real server + MySQL, on a throwaway database. Add `-- <name>` to run one suite, e.g. `-- security` |
 | `server/` | `npm run dev` | API with nodemon |
 | `server/` | `npm start` | API |
 | root | `node tools/mock-api.js` | Fake API, no database |

@@ -99,7 +99,11 @@ export default function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute end-0 z-50 mt-2 max-h-[70vh] w-80 overflow-y-auto card p-0">
+        // Phones: a full-width sheet under the top bar. A 320px dropdown
+        // anchored to the bell ran off the right edge there, cutting off the
+        // start of every (right-to-left) line. Wider screens: the dropdown.
+        // Logical start/end on both sides so the sm: overrides are clean.
+        <div className="fixed start-2 end-2 top-16 z-50 max-h-[75vh] overflow-y-auto card p-0 sm:absolute sm:start-auto sm:end-0 sm:top-auto sm:mt-2 sm:max-h-[70vh] sm:w-80">
           <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2 dark:border-slate-700">
             <span className="text-sm font-bold">{T.notifications}</span>
             {unread.length > 0 && (

@@ -1,6 +1,10 @@
 // Accounts, sessions and input checks, against the REAL server + MySQL.
 // Run through `npm run test:integration`. Expects an empty database.
+import { createRequire } from 'node:module';
 import jwtLib from '../node_modules/jsonwebtoken/index.js';
+
+const require = createRequire(import.meta.url);
+const { isLocalAddress, lanOnly } = require('../middleware/lanOnly.js');
 
 const BASE = process.argv[2];
 if (!BASE) {
@@ -202,6 +206,65 @@ console.log('\nBrowser hardening');
   ok(r.headers.get('x-content-type-options') === 'nosniff' && r.headers.get('x-frame-options') === 'DENY', 'nosniff and no-framing headers are sent');
   ok(!r.headers.get('x-powered-by'), 'the server does not advertise Express');
   ok(r.data?.db === 'ready', '/api/health reports the database as ready');
+}
+
+// ---- reachable from outside only through a tunnel ------------------------------------------
+console.log('\nOutside access (tunnel / VPN only)');
+{
+  const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1', '10.1.2.3', '172.16.0.9', '172.31.255.1', '192.168.1.33',
+    '::ffff:192.168.1.20', '169.254.10.1', '100.64.0.1', '100.127.255.254', 'fe80::1%en0', 'fd12:3456::1'];
+  const outside = ['8.8.8.8', '213.6.226.163', '172.32.0.1', '172.15.255.255', '100.128.0.1', '11.0.0.1',
+    '2001:db8::1', '::ffff:8.8.8.8', '', null, 'not-an-ip'];
+  const wrongLocal = local.filter((a) => !isLocalAddress(a));
+  const wrongOutside = outside.filter((a) => isLocalAddress(a));
+  ok(wrongLocal.length === 0, 'local network, this computer and VPN addresses are let in', wrongLocal.join(', '));
+  ok(wrongOutside.length === 0, 'public internet addresses are recognised as outside', wrongOutside.join(', '));
+
+  const run = (address, enabled = true) => {
+    let status = null;
+    let passedOn = false;
+    const res = { status(code) { status = code; return this; }, type() { return this; }, send() { return this; } };
+    lanOnly({ enabled })({ socket: { remoteAddress: address } }, res, () => { passedOn = true; });
+    return { status, passedOn };
+  };
+  const pub = run('213.6.226.163');
+  ok(pub.status === 403 && !pub.passedOn, 'a direct connection from the internet (a forwarded router port) gets 403');
+  ok(run('192.168.1.20').passedOn, 'a phone on the Wi-Fi gets through');
+  ok(run('127.0.0.1').passedOn, 'the tunnel (connecting from this computer) gets through');
+  ok(run('213.6.226.163', false).passedOn, 'LAN_ONLY=off switches the guard off');
+
+  const spoof = await call('GET', '/api/health', { headers: { 'X-Forwarded-For': '8.8.8.8' } });
+  ok(spoof.status === 200, 'a visitor address in X-Forwarded-For (the tunnel case) is not mistaken for a direct outside connection');
+  ok(/^[0-9a-f]{12}$/.test(spoof.data?.instance || ''), '/api/health tells this server instance apart (used to catch a second copy)');
+
+  // Behind the tunnel every visitor connects from this computer; the real
+  // address comes in X-Forwarded-For. Throttling must count each visitor.
+  const viaTunnel = (ip) => ({ 'X-Forwarded-For': ip });
+  let last;
+  for (let i = 0; i < 8; i++) {
+    last = await call('POST', '/api/auth/login', { body: { username: 'acc1', password: `guess-${i}` }, headers: viaTunnel('203.0.113.9') });
+  }
+  ok(last.status === 401, 'setup: 8 wrong passwords for acc1 from one outside visitor');
+  const blocked = await call('POST', '/api/auth/login', { body: { username: 'acc1', password: 'pass1234' }, headers: viaTunnel('203.0.113.9') });
+  ok(blocked.status === 429, 'that visitor is then locked out of acc1, even with the right password', `${blocked.status}`);
+  const other = await call('POST', '/api/auth/login', { body: { username: 'acc1', password: 'pass1234' }, headers: viaTunnel('198.51.100.7') });
+  ok(other.status === 200, 'a different visitor (the real acc1, elsewhere) is not locked out with them', `${other.status}`);
+
+  const signup = (name, ip) => call('POST', '/api/auth/register', {
+    body: { username: name, password: 'pass1234', role: 'taker' }, headers: ip ? viaTunnel(ip) : {},
+  });
+  const firstFive = [];
+  for (let i = 0; i < 5; i++) firstFive.push((await signup(`spam${i}`, '203.0.113.50')).status);
+  ok(firstFive.every((s) => s === 201), 'an outside visitor can sign up 5 times in an hour', firstFive.join());
+  const sixth = await signup('spam5', '203.0.113.50');
+  ok(sixth.status === 429, 'the 6th sign-up from them is refused (429)', `${sixth.status}`);
+  ok((await signup('elsewhere1', '203.0.113.51')).status === 201, 'another visitor can still sign up');
+  ok((await signup('atthedesk1')).status === 201, 'sign-ups at the server computer itself are not limited');
+
+  const cross = await call('GET', '/api/health', { headers: { Origin: 'https://evil.example' } });
+  ok(!cross.headers.get('access-control-allow-origin'), 'a foreign website gets no CORS permission to read the API');
+  const pre = await call('OPTIONS', '/api/orders', { headers: { Origin: 'https://evil.example', 'Access-Control-Request-Method': 'POST' } });
+  ok(!pre.headers.get('access-control-allow-origin'), 'nor in a preflight request');
 }
 
 // ---- guessing passwords (last: it locks this address out for a while) -----------------------

@@ -58,8 +58,32 @@ setInterval(() => {
 
 // ---------------------------------------------------------------------------
 
+// Sign-ups per address: the sign-up page is public once the system has an
+// online link, and every sign-up lands in the admin's approval list.
+const SIGNUPS_PER_HOUR = 5;
+const signups = new Map(); // address -> [times]
+setInterval(() => {
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    for (const [address, times] of signups) {
+        const recent = times.filter((t) => t > cutoff);
+        if (recent.length) signups.set(address, recent);
+        else signups.delete(address);
+    }
+}, 10 * 60 * 1000).unref();
+
+// Someone sitting at the server computer itself is not internet spam. (Tunnel
+// visitors also connect from this computer, but req.ip is then their own
+// address - see 'trust proxy' in index.js - so they are still counted.)
+const THIS_COMPUTER = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
 router.post('/register', async (req, res) => {
     try {
+        const cutoff = Date.now() - 60 * 60 * 1000;
+        const recent = (signups.get(req.ip) || []).filter((t) => t > cutoff);
+        if (!THIS_COMPUTER.has(req.ip) && recent.length >= SIGNUPS_PER_HOUR) {
+            return res.status(429).json({ error: 'Too many sign-ups from this address. Try again later.' });
+        }
+
         const { username, password, role } = req.body || {};
         const name = typeof username === 'string' ? username.trim() : '';
 
@@ -78,6 +102,7 @@ router.post('/register', async (req, res) => {
             role,
             isApproved: false
         });
+        signups.set(req.ip, [...recent, Date.now()]);
 
         await logActivity(user.id, 'user_registered', 'user', user.id, {
             username: user.username,

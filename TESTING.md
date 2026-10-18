@@ -78,8 +78,8 @@ Against the mock, driving the real UI:
 
 ## Verified against the real server and MySQL 26.7
 
-Run with `npm run test:integration` in `server/` — **329 checks across six suites**
-(api 66, concurrency 34, telegram 45, open-orders 77, backup 47, security 60).
+Run with `npm run test:integration` in `server/` — **checks across six suites**
+(api 66, concurrency 34, telegram 45, open-orders 77, backup 47, security 77) - **346 in all**.
 It creates a throwaway database, runs everything against the real routes and
 real MySQL, and drops it afterwards — your own database is never touched. Test
 servers also write their backups and order logs to a throwaway folder, and
@@ -131,7 +131,9 @@ never take automatic backups.
 | Input limits | Over-long names, descriptions, out-of-range quantities and prices, unknown cities: 400 with a clear message, on create and edit |
 | Search | "%" and "_" are matched literally |
 | Login throttling | 8 wrong passwords lock that name for 15 minutes; others can still log in |
-| **Launcher (Windows)** | Start with nothing running (installs/builds as needed, waits for the database, prints the phone address without the VirtualBox adapter); start when already running; start with MySQL unreachable (clear message, nothing left running); stop; restore cancelled (nothing changed) |
+| **Outside access** | Local, this-computer and VPN addresses let in; public addresses (incl. the old system's 213.6.226.163) refused with 403; X-Forwarded-For can neither bypass nor trip the guard; `LAN_ONLY=off` switches it off |
+| Behind a tunnel | Each outside visitor is throttled separately (8 failures lock that visitor, not the real user elsewhere); outside sign-ups capped at 5 an hour per address, none at the server itself; foreign websites get no CORS permission |
+| **Launcher (Windows)** | First start against a database that does not exist yet: creates it and starts. Start with nothing running (installs/builds as needed, waits for the database, prints the phone address without the VirtualBox adapter); start when already running; start with MySQL unreachable (clear message, nothing left running); stop; restore cancelled (nothing changed) |
 
 ---
 

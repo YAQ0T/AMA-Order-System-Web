@@ -21,6 +21,7 @@ const EXACT = {
   'Password must be at least 6 characters': 'كلمة المرور يجب ألا تقل عن 6 أحرف',
   'Password is too long': 'كلمة المرور طويلة جداً',
   'Invalid role': 'الدور غير صالح',
+  'Too many sign-ups from this address. Try again later.': 'محاولات تسجيل كثيرة من نفس العنوان. حاول لاحقاً.',
   'Current password is incorrect': 'كلمة المرور الحالية غير صحيحة',
   'The new password must be different from the current one': 'كلمة المرور الجديدة يجب أن تختلف عن الحالية',
 

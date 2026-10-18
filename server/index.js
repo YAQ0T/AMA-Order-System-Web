@@ -47,12 +47,21 @@ const findAvailablePort = async (preferredPort, attempts = 10) => {
     throw new Error(`Port ${preferredPort} is not available. Please stop the process using it or set PORT env.`);
 };
 
-// Middleware: allow all origins (mobile/web clients on LAN). Logins travel in
-// an Authorization header, never a cookie, so this does not open the door to
-// cross-site request forgery.
+// Outside visitors arrive through a tunnel running on this computer
+// (Cloudflare Tunnel connects to localhost), so for connections from this
+// computer the visitor's real address is taken from X-Forwarded-For. That is
+// what the login throttling and the logs see. Nobody else's header is trusted.
+app.set('trust proxy', 'loopback');
+
+// Answer only the local network and this computer - see middleware/lanOnly.js.
+app.use(require('./middleware/lanOnly').lanOnly());
+
+// The web client is served from this same server, so it needs no CORS at all.
+// Other origins get no CORS headers (browsers then refuse to let a foreign page
+// read the API) unless listed in CORS_ORIGINS, e.g. a client hosted elsewhere.
+const corsOrigins = (process.env.CORS_ORIGINS || '').split(',').map((o) => o.trim()).filter(Boolean);
 app.use(cors({
-    origin: true,
-    credentials: true
+    origin: (origin, done) => done(null, Boolean(origin) && corsOrigins.includes(origin))
 }));
 app.use(express.json());
 
@@ -256,8 +265,12 @@ app.use('/api/items', require('./routes/items'));
 app.use('/api/telegram', require('./routes/telegram'));
 
 // Health check (handy for checking the API is reachable from a browser/LAN device)
+// `instance` is random per start. The launcher compares it with what the
+// online link answers, to catch a second copy running on another computer
+// (which would mean two separate databases behind one link).
+const INSTANCE_ID = require('crypto').randomBytes(6).toString('hex');
 app.get('/api/health', (req, res) => {
-    res.json({ ok: true, time: new Date().toISOString(), db: dbState.state, dbCode: dbState.code });
+    res.json({ ok: true, time: new Date().toISOString(), db: dbState.state, dbCode: dbState.code, instance: INSTANCE_ID });
 });
 
 // Serve the built React client from client/dist when it has been built.

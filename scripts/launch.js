@@ -210,13 +210,72 @@ function ensureClientBuild() {
 // The server reads PORT from its environment first, then server/.env.
 const serverPort = (env) => Number(process.env.PORT || env.PORT) || 6001;
 
-async function health(port) {
+/** The health answer of an AMA server at `base`, or null if none answers there. */
+async function healthAt(base, timeoutMs = 4000) {
     try {
-        const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(1500) });
-        return res.ok ? await res.json() : null;
+        const res = await fetch(`${base.replace(/\/$/, '')}/api/health`, { signal: AbortSignal.timeout(timeoutMs) });
+        if (!res.ok) return null;
+        const body = await res.json();
+        return body && body.ok ? body : null;
     } catch {
         return null;
     }
+}
+
+const health = (port) => healthAt(`http://127.0.0.1:${port}`, 1500);
+
+/** Every IPv4 address of this computer, virtual adapters included. */
+function ownAddresses() {
+    const out = [];
+    for (const list of Object.values(os.networkInterfaces())) {
+        for (const a of list || []) if (a.family === 'IPv4') out.push(a.address);
+    }
+    return out;
+}
+
+/**
+ * APP_URL from server/.env when it points somewhere other than this computer:
+ * normally the https link of the Cloudflare tunnel. Null when it is unset or
+ * just this machine's own address.
+ */
+function onlineLink(env) {
+    // Like the server, the environment wins over server/.env.
+    const raw = String(process.env.APP_URL ?? env.APP_URL ?? '').trim().replace(/\/$/, '');
+    if (!raw) return null;
+    let host;
+    try {
+        host = new URL(raw).hostname;
+    } catch {
+        return null;
+    }
+    const mine = new Set(['localhost', '127.0.0.1', '[::1]', ...ownAddresses()]);
+    return mine.has(host) ? null : raw;
+}
+
+/**
+ * After starting: does the online link reach THIS server? Each server start
+ * has a random instance id, so a different id means another copy, on another
+ * computer, is connected to the same link.
+ */
+async function reportOnlineLink(link, instance) {
+    for (let attempt = 0; attempt < 6; attempt++) {
+        const remote = await healthAt(link);
+        if (remote && remote.instance === instance) {
+            good(`Online link working: ${link}`);
+            return;
+        }
+        if (remote && remote.instance && remote.instance !== instance) {
+            say();
+            warn(`ANOTHER COPY of the system is also answering ${link}.`);
+            warn('That means two computers with two separate databases behind one link.');
+            warn('Run Stop AMA on the other computer (and stop its tunnel) right away.');
+            say();
+            return;
+        }
+        await sleep(2000);
+    }
+    warn(`The online link ${link} is not answering yet.`);
+    warn('Is the Cloudflare tunnel (cloudflared) running on this computer? See ONLINE-ACCESS.md.');
 }
 
 const readPid = () => {
@@ -342,18 +401,31 @@ const DB_ADVICE = {
     ER_BAD_DB_ERROR: 'The database does not exist yet. In server/, run "npm run db:create", then Start AMA again.',
 };
 
-async function start() {
-    say('\nAMA Order System - starting\n');
+async function start(options = {}) {
+    if (!options.createdDatabase) say('\nAMA Order System - starting\n');
     checkNode();
     const env = ensureEnv();
     const port = serverPort(env);
 
+    const link = onlineLink(env);
     const running = await health(port);
     if (running) {
         good(`Already running on port ${port}.`);
         printAddresses(port);
+        if (link) await reportOnlineLink(link, running.instance);
         openBrowser(`http://localhost:${port}`);
         return;
+    }
+
+    // The data lives on ONE computer. If the online link already answers
+    // while nothing runs here, the system is running on another computer:
+    // starting a second copy would split the orders across two databases.
+    if (link && (await healthAt(link))) {
+        stop([
+            `The system is already running on another computer (it answers at ${link}).`,
+            '  Run Stop AMA on that computer first, then start it here.',
+            '  Two copies at once would mean two separate databases, and Telegram works with only one.',
+        ]);
     }
     const squatters = listenersOn(port);
     if (squatters.length) {
@@ -391,6 +463,13 @@ async function start() {
     child.unref();
     fs.writeFileSync(PID_FILE, String(child.pid));
 
+    // A Mac that goes to sleep takes the system offline for everyone. Keep it
+    // awake for exactly as long as the server runs (-w ends with it). The
+    // display may still turn off. Only works on mains power, by Apple's design.
+    if (IS_MAC) {
+        spawn('caffeinate', ['-i', '-s', '-w', String(child.pid)], { detached: true, stdio: 'ignore' }).unref();
+    }
+
     let exited = false;
     child.on('exit', () => {
         exited = true;
@@ -403,6 +482,15 @@ async function start() {
         state = await health(port);
         if (state && state.db !== 'starting') break;
         await sleep(500);
+    }
+
+    // First run on a new computer: MySQL is installed but the database is not
+    // created yet. Create it (utf8mb4, see server/create-db.js) and try again.
+    if (!exited && state?.dbCode === 'ER_BAD_DB_ERROR' && !options.createdDatabase) {
+        await kill(child.pid);
+        step('The database does not exist yet - creating it...');
+        const made = spawnSync(process.execPath, ['create-db.js'], { cwd: SERVER, stdio: 'inherit' });
+        if (made.status === 0) return start({ createdDatabase: true });
     }
 
     if (exited || !state || state.db !== 'ready') {
@@ -424,7 +512,9 @@ async function start() {
     }
 
     good(`Running (process ${child.pid}). The database is ready.`);
+    if (IS_MAC) good('This Mac will not go to sleep while the system runs (when plugged in).');
     printAddresses(port);
+    if (link) await reportOnlineLink(link, state.instance);
     say('  You can close this window - the system keeps running.');
     say('  To stop it, use Stop AMA. The server log is in .ama_runtime/server.log');
     openBrowser(`http://localhost:${port}`);
@@ -491,11 +581,106 @@ async function restore() {
 }
 
 // ---------------------------------------------------------------------------
+// Starting automatically
+//
+// Mac: a login item (LaunchAgent) in ~/Library/LaunchAgents.
+// Windows: a small script in the user's Startup folder.
+// Both run "start" when the user logs in, so after a power cut the system
+// comes back as soon as the computer is on and logged in.
 
-const commands = { start, stop: () => stopServer(), restore };
+const MAC_AGENT = path.join(os.homedir(), 'Library', 'LaunchAgents', 'com.ama.ordersystem.plist');
+const WIN_STARTUP = path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'AMA Order System.cmd');
+
+const xmlEscape = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+function autostartFile() {
+    if (IS_MAC) return MAC_AGENT;
+    if (IS_WIN) return WIN_STARTUP;
+    return null;
+}
+
+function enableAutostart() {
+    fs.mkdirSync(RUNTIME, { recursive: true });
+    if (IS_MAC) {
+        // A login item does not get your shell's PATH: use node's absolute
+        // path, and put its folder (npm lives next to it) on PATH for the
+        // occasional rebuild.
+        const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
+        const nodeDir = path.dirname(process.execPath);
+        const command = [
+            `export PATH=${q(nodeDir)}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
+            `cd ${q(ROOT)}`,
+            `AMA_NO_BROWSER=1 ${q(process.execPath)} scripts/launch.js start`,
+        ].join(' && ');
+        const plist = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+            '<plist version="1.0">',
+            '<dict>',
+            '  <key>Label</key><string>com.ama.ordersystem</string>',
+            '  <key>ProgramArguments</key>',
+            `  <array><string>/bin/bash</string><string>-c</string><string>${xmlEscape(command)}</string></array>`,
+            '  <key>RunAtLoad</key><true/>',
+            `  <key>StandardOutPath</key><string>${xmlEscape(path.join(RUNTIME, 'autostart.log'))}</string>`,
+            `  <key>StandardErrorPath</key><string>${xmlEscape(path.join(RUNTIME, 'autostart.log'))}</string>`,
+            '</dict>',
+            '</plist>',
+            '',
+        ].join('\n');
+        fs.mkdirSync(path.dirname(MAC_AGENT), { recursive: true });
+        fs.writeFileSync(MAC_AGENT, plist);
+        return;
+    }
+    if (IS_WIN) {
+        const script = [
+            '@echo off',
+            'REM Starts the AMA Order System when you log in. Created by "Autostart AMA";',
+            'REM run that again (or delete this file) to stop it.',
+            `cd /d "${ROOT}"`,
+            'set AMA_NO_BROWSER=1',
+            `"${process.execPath}" scripts\\launch.js start >> ".ama_runtime\\autostart.log" 2>&1`,
+            '',
+        ].join('\r\n');
+        fs.mkdirSync(path.dirname(WIN_STARTUP), { recursive: true });
+        fs.writeFileSync(WIN_STARTUP, script);
+        return;
+    }
+    stop('Starting automatically is only set up for Windows and Mac.');
+}
+
+function disableAutostart() {
+    const file = autostartFile();
+    if (file && fs.existsSync(file)) fs.unlinkSync(file);
+}
+
+async function autostart() {
+    say('\nAMA Order System - start automatically\n');
+    const file = autostartFile();
+    if (!file) stop('Starting automatically is only set up for Windows and Mac.');
+    const on = fs.existsSync(file);
+    say(`  Right now: ${on ? 'ON - the system starts when you log in to this computer.' : 'OFF - you start it with Start AMA.'}`);
+    say();
+    const answer = await ask('  Start the system automatically when you log in to this computer? (y/n): ');
+    if (answer === 'y' || answer === 'yes') {
+        enableAutostart();
+        good('ON. From the next login the system starts by itself (no browser window).');
+        say(IS_MAC
+            ? '  For it to come back after a power cut, the Mac must log in by itself:\n  System Settings > Users & Groups > "Automatically log in as" (not available with FileVault on).'
+            : '  For it to come back after a power cut, Windows must log in by itself (or someone logs in).');
+    } else if (answer === 'n' || answer === 'no') {
+        disableAutostart();
+        good('OFF. Use Start AMA to start the system.');
+    } else {
+        say('  Nothing changed.');
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+const commands = { start, stop: () => stopServer(), restore, autostart };
 const command = commands[process.argv[2]];
 if (!command) {
-    console.error('usage: node scripts/launch.js start|stop|restore');
+    console.error('usage: node scripts/launch.js start|stop|restore|autostart');
     process.exit(2);
 }
 
