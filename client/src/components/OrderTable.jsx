@@ -1,12 +1,132 @@
 import { useState } from 'react';
 
 import { T, statusLabel } from '../lib/labels';
-import { formatDateTime, formatPrice, formatQuantity, lineTotal, orderTitle, orderTotal, formatMoney } from '../lib/format';
+import { formatDateTime, formatPrice, formatQuantity, lineTotal, orderTitle, orderTotal, formatMoney, orderDescription } from '../lib/format';
 import { StatusChip, ItemStatusChip, InfoChip, Ltr, EmptyState } from './ui';
 import { isOpenOrder } from '../api/orders';
 import { historyText } from '../lib/historyText';
+import { markClasses } from '../lib/orderMarks';
+import OrderMarks from './OrderMarks';
 
 const ALL_STATUSES = ['pending', 'in-progress', 'completed', 'archived', 'entered_erp'];
+
+
+const rowTint = (item) =>
+  item.status === 'unavailable'
+    ? 'bg-red-50/60 dark:bg-red-500/5'
+    : item.status === 'collected'
+      ? 'bg-emerald-50/60 dark:bg-emerald-500/5'
+      : '';
+
+/** Collected / unavailable / edit for one item - the same buttons in both layouts. */
+function ItemButtons({ order, item, onItemStatus, busyItems, onItemEdit }) {
+  const busy = busyItems?.has(`${order.id}:${item.name}`);
+  // Finger-sized on phones; the compact desktop size from the sm breakpoint up.
+  const base = 'rounded px-3 py-2 text-sm font-bold transition disabled:opacity-40 sm:px-2 sm:py-1 sm:text-xs';
+  return (
+    <>
+      {onItemStatus && (
+        <>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onItemStatus(order, item.name, item.status === 'collected' ? null : 'collected')}
+            className={[
+              base,
+              item.status === 'collected'
+                ? 'bg-emerald-600 text-white'
+                : 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300',
+            ].join(' ')}
+          >
+            {T.markCollected}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onItemStatus(order, item.name, item.status === 'unavailable' ? null : 'unavailable')}
+            className={[
+              base,
+              item.status === 'unavailable'
+                ? 'bg-red-600 text-white'
+                : 'bg-red-100 text-red-800 hover:bg-red-200 dark:bg-red-500/20 dark:text-red-300',
+            ].join(' ')}
+          >
+            {T.markUnavailable}
+          </button>
+        </>
+      )}
+      {onItemEdit && (
+        <button
+          type="button"
+          onClick={() => onItemEdit(order, item)}
+          className={`${base} text-slate-600 hover:bg-slate-100 dark:text-ink-400 dark:hover:bg-slate-700`}
+        >
+          {T.edit}
+        </button>
+      )}
+    </>
+  );
+}
+
+const infoChip = 'chip bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-ink-50';
+
+/**
+ * Phones: one block per item. The name gets the whole width of its line (in
+ * the table it was squeezed to one word per line by the columns next to it),
+ * and the quantity, prices and buttons go on the line below.
+ */
+function ItemsList({ order, showPrices, onItemStatus, busyItems, onItemEdit }) {
+  const items = order.Items || [];
+  const total = orderTotal(order);
+  return (
+    <div className="sm:hidden">
+      <ul>
+        {items.map((item, index) => (
+          <li
+            key={item.name}
+            className={['border-b border-slate-100 px-1 py-2.5 last:border-0 dark:border-slate-700/60', rowTint(item)].join(' ')}
+          >
+            <p className="flex gap-2 font-semibold leading-snug">
+              <span className="shrink-0 text-xs font-normal leading-6 text-slate-400">
+                <Ltr>{index + 1}</Ltr>
+              </span>
+              <span className="min-w-0 break-words">{item.name}</span>
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className={infoChip}>
+                {T.quantity}: <Ltr>{formatQuantity(item.quantity)}</Ltr>
+              </span>
+              {showPrices && (
+                <span className={infoChip}>
+                  {T.price}: <Ltr>{formatPrice(item.price)}</Ltr>
+                </span>
+              )}
+              {showPrices && (
+                <span className={infoChip}>
+                  {T.total}: <Ltr>{formatMoney(lineTotal(item))}</Ltr>
+                </span>
+              )}
+              {/* Takers see the status in the buttons (the chosen one is filled). */}
+              {!onItemStatus && <ItemStatusChip status={item.status} />}
+              <ItemButtons
+                order={order}
+                item={item}
+                onItemStatus={onItemStatus}
+                busyItems={busyItems}
+                onItemEdit={onItemEdit}
+              />
+            </div>
+          </li>
+        ))}
+      </ul>
+      {showPrices && total > 0 && (
+        <p className="mt-2 border-t-2 border-slate-300 pt-2 text-end text-sm font-bold dark:border-slate-600">
+          {T.grandTotal}: <Ltr>{formatMoney(total)}</Ltr>
+        </p>
+      )}
+    </div>
+  );
+}
 
 function ItemsTable({ order, showPrices, onItemStatus, busyItems, onItemEdit, onItemAdd }) {
   const items = order.Items || [];
@@ -17,117 +137,85 @@ function ItemsTable({ order, showPrices, onItemStatus, busyItems, onItemEdit, on
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-slate-200 text-start text-xs text-slate-500 dark:border-slate-700 dark:text-ink-400">
-            <th className="w-8 py-2 text-start font-bold">#</th>
-            <th className="py-2 text-start font-bold">{T.itemName}</th>
-            <th className="w-20 py-2 text-start font-bold">{T.quantity}</th>
-            {showPrices && <th className="w-24 py-2 text-start font-bold">{T.price}</th>}
-            {showPrices && <th className="w-24 py-2 text-start font-bold">{T.total}</th>}
-            <th className="w-28 py-2 text-start font-bold">{T.status}</th>
-            {(onItemStatus || onItemEdit) && <th className="w-44 py-2 text-start font-bold">{T.actions}</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((item, index) => (
-            <tr
-              key={item.name}
-              className={[
-                'border-b border-slate-100 last:border-0 dark:border-slate-700/60',
-                item.status === 'unavailable' ? 'bg-red-50/60 dark:bg-red-500/5' : '',
-                item.status === 'collected' ? 'bg-emerald-50/60 dark:bg-emerald-500/5' : '',
-              ].join(' ')}
-            >
-              <td className="py-2 text-slate-400">
-                <Ltr>{index + 1}</Ltr>
-              </td>
-              <td className="py-2 font-semibold">{item.name}</td>
-              <td className="py-2">
-                <Ltr>{formatQuantity(item.quantity)}</Ltr>
-              </td>
-              {showPrices && (
-                <td className="py-2">
-                  <Ltr>{formatPrice(item.price)}</Ltr>
-                </td>
-              )}
-              {showPrices && (
-                <td className="py-2">
-                  <Ltr>{formatMoney(lineTotal(item))}</Ltr>
-                </td>
-              )}
-              <td className="py-2">
-                <ItemStatusChip status={item.status} />
-              </td>
-              {(onItemStatus || onItemEdit) && (
-                <td className="py-2">
-                  {/* Takers tap these on a phone, so they are finger-sized below the sm breakpoint. */}
-                  <div className="flex flex-wrap gap-1.5 sm:gap-1">
-                    {onItemStatus && (
-                      <>
-                        <button
-                          type="button"
-                          disabled={busyItems?.has(`${order.id}:${item.name}`)}
-                          onClick={() =>
-                            onItemStatus(order, item.name, item.status === 'collected' ? null : 'collected')
-                          }
-                          className={[
-                            'rounded px-3 py-2 text-sm font-bold transition disabled:opacity-40 sm:px-2 sm:py-1 sm:text-xs',
-                            item.status === 'collected'
-                              ? 'bg-emerald-600 text-white'
-                              : 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300',
-                          ].join(' ')}
-                        >
-                          {T.markCollected}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busyItems?.has(`${order.id}:${item.name}`)}
-                          onClick={() =>
-                            onItemStatus(order, item.name, item.status === 'unavailable' ? null : 'unavailable')
-                          }
-                          className={[
-                            'rounded px-3 py-2 text-sm font-bold transition disabled:opacity-40 sm:px-2 sm:py-1 sm:text-xs',
-                            item.status === 'unavailable'
-                              ? 'bg-red-600 text-white'
-                              : 'bg-red-100 text-red-800 hover:bg-red-200 dark:bg-red-500/20 dark:text-red-300',
-                          ].join(' ')}
-                        >
-                          {T.markUnavailable}
-                        </button>
-                      </>
-                    )}
-                    {onItemEdit && (
-                      <button
-                        type="button"
-                        onClick={() => onItemEdit(order, item)}
-                        className="rounded px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100 sm:px-2 sm:py-1 sm:text-xs dark:text-ink-400 dark:hover:bg-slate-700"
-                      >
-                        {T.edit}
-                      </button>
-                    )}
-                  </div>
-                </td>
-              )}
+    <div>
+      <ItemsList
+        order={order}
+        showPrices={showPrices}
+        onItemStatus={onItemStatus}
+        busyItems={busyItems}
+        onItemEdit={onItemEdit}
+      />
+      <div className="hidden overflow-x-auto sm:block">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-slate-200 text-start text-xs text-slate-500 dark:border-slate-700 dark:text-ink-400">
+              <th className="w-8 py-2 text-start font-bold">#</th>
+              <th className="py-2 text-start font-bold">{T.itemName}</th>
+              <th className="w-20 py-2 text-start font-bold">{T.quantity}</th>
+              {showPrices && <th className="w-24 py-2 text-start font-bold">{T.price}</th>}
+              {showPrices && <th className="w-24 py-2 text-start font-bold">{T.total}</th>}
+              <th className="w-28 py-2 text-start font-bold">{T.status}</th>
+              {(onItemStatus || onItemEdit) && <th className="w-44 py-2 text-start font-bold">{T.actions}</th>}
             </tr>
-          ))}
-        </tbody>
-        {showPrices && total > 0 && (
-          <tfoot>
-            <tr className="border-t-2 border-slate-300 dark:border-slate-600">
-              <td colSpan={3} className="py-2 text-end font-bold">
-                {T.grandTotal}
-              </td>
-              <td colSpan={2} className="py-2 font-bold">
-                <Ltr>{formatMoney(total)}</Ltr>
-              </td>
-              <td />
-              {(onItemStatus || onItemEdit) && <td />}
-            </tr>
-          </tfoot>
-        )}
-      </table>
+          </thead>
+          <tbody>
+            {items.map((item, index) => (
+              <tr
+                key={item.name}
+                className={['border-b border-slate-100 last:border-0 dark:border-slate-700/60', rowTint(item)].join(' ')}
+              >
+                <td className="py-2 text-slate-400">
+                  <Ltr>{index + 1}</Ltr>
+                </td>
+                <td className="py-2 font-semibold">{item.name}</td>
+                <td className="py-2">
+                  <Ltr>{formatQuantity(item.quantity)}</Ltr>
+                </td>
+                {showPrices && (
+                  <td className="py-2">
+                    <Ltr>{formatPrice(item.price)}</Ltr>
+                  </td>
+                )}
+                {showPrices && (
+                  <td className="py-2">
+                    <Ltr>{formatMoney(lineTotal(item))}</Ltr>
+                  </td>
+                )}
+                <td className="py-2">
+                  <ItemStatusChip status={item.status} />
+                </td>
+                {(onItemStatus || onItemEdit) && (
+                  <td className="py-2">
+                    <div className="flex flex-wrap gap-1">
+                      <ItemButtons
+                        order={order}
+                        item={item}
+                        onItemStatus={onItemStatus}
+                        busyItems={busyItems}
+                        onItemEdit={onItemEdit}
+                      />
+                    </div>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+          {showPrices && total > 0 && (
+            <tfoot>
+              <tr className="border-t-2 border-slate-300 dark:border-slate-600">
+                <td colSpan={3} className="py-2 text-end font-bold">
+                  {T.grandTotal}
+                </td>
+                <td colSpan={2} className="py-2 font-bold">
+                  <Ltr>{formatMoney(total)}</Ltr>
+                </td>
+                <td />
+                {(onItemStatus || onItemEdit) && <td />}
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
 
       {onItemAdd && (
         <button
@@ -183,7 +271,7 @@ function OrderCard({
   const [historyOpen, setHistoryOpen] = useState(false);
 
   return (
-    <article className="card mb-3 p-4">
+    <article className={['card mb-3 p-4', markClasses(order)].join(' ')}>
       <header className="mb-3 flex flex-wrap items-start gap-3">
         {selectable && (
           <input
@@ -208,6 +296,7 @@ function OrderCard({
           </div>
 
           <div className="flex flex-wrap gap-1.5">
+            <OrderMarks order={order} />
             <StatusChip status={order.status} />
             {order.city && <InfoChip>{order.city}</InfoChip>}
             {order.Maker && (
@@ -232,8 +321,8 @@ function OrderCard({
             )}
           </div>
 
-          {order.description && (
-            <p className="mt-2 text-sm text-slate-600 dark:text-ink-400">{order.description}</p>
+          {orderDescription(order) && (
+            <p className="mt-2 text-sm text-slate-600 dark:text-ink-400">{orderDescription(order)}</p>
           )}
         </div>
 

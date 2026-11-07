@@ -17,7 +17,12 @@ const emptyItem = () => ({ key: Math.random().toString(36).slice(2), name: '', q
  */
 const sessionProductNames = new Set();
 
-export default function OrderForm() {
+/**
+ * `admin`: the admin's form. Everything an admin creates is urgent (the server
+ * marks it), and there is no "save as archived" - the admin has no archived tab
+ * to send drafts from.
+ */
+export default function OrderForm({ admin = false }) {
   const toast = useToast();
   const createOrder = useCreateOrder();
   const { data: takers = [], isLoading: takersLoading } = useTakers();
@@ -25,12 +30,14 @@ export default function OrderForm() {
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [isOnline, setIsOnline] = useState(false);
   const [city, setCity] = useState(DEFAULT_CITY);
   const [items, setItems] = useState([emptyItem()]);
   const [takerIds, setTakerIds] = useState([]);
-  // Left for any taker instead of assigned. Not cleared by reset(): it is a
-  // way of working, and a maker who uses it will want it for the next order too.
-  const [openToAll, setOpenToAll] = useState(false);
+  // Left for any taker instead of assigned. On by default: most orders go to
+  // whoever is free. Untick it to pick takers by name for this one order -
+  // reset() turns it back on for the next.
+  const [openToAll, setOpenToAll] = useState(true);
   const [accounterId, setAccounterId] = useState('');
   const [errors, setErrors] = useState({});
 
@@ -69,9 +76,11 @@ export default function OrderForm() {
   const reset = () => {
     setTitle('');
     setDescription('');
+    setIsOnline(false);
     setCity(DEFAULT_CITY);
     setItems([emptyItem()]);
     setTakerIds([]);
+    setOpenToAll(true);
     setAccounterId('');
     setErrors({});
     requestAnimationFrame(() => {
@@ -149,6 +158,7 @@ export default function OrderForm() {
         accounterId: archive ? null : Number(accounterId),
         ...(archive ? { status: 'archived' } : {}),
         ...(!archive && openToAll ? { openToAll: true } : {}),
+        ...(isOnline ? { isOnline: true } : {}),
       });
 
       cleaned.forEach((item) => sessionProductNames.add(item.name));
@@ -160,10 +170,12 @@ export default function OrderForm() {
   };
 
   useShortcuts(
-    {
-      'ctrl+enter': () => submit(false),
-      F3: () => submit(true),
-    },
+    admin
+      ? { 'ctrl+enter': () => submit(false) }
+      : {
+          'ctrl+enter': () => submit(false),
+          F3: () => submit(true),
+        },
     { target: formRef }
   );
 
@@ -178,10 +190,21 @@ export default function OrderForm() {
         submit(false);
       }}
     >
+      {admin && (
+        <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-800 dark:bg-red-500/10 dark:text-red-200">
+          {T.adminOrdersUrgent}
+        </p>
+      )}
+
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-base font-bold">{T.newOrder}</h2>
+        <h2 className="text-base font-bold">{admin ? T.newUrgentOrder : T.newOrder}</h2>
         <p className="text-xs text-slate-400">
-          {T.keyboardHints}: <span className="ltr">Ctrl+Enter</span> / <span className="ltr">F3</span> /{' '}
+          {T.keyboardHints}: <span className="ltr">Ctrl+Enter</span> /{' '}
+          {!admin && (
+            <>
+              <span className="ltr">F3</span> /{' '}
+            </>
+          )}
           <span className="ltr">F7</span>
         </p>
       </div>
@@ -235,6 +258,15 @@ export default function OrderForm() {
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
+        <label className="mt-2 flex w-fit cursor-pointer items-center gap-2 text-sm font-bold text-sky-800 dark:text-sky-200">
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-sky-600"
+            checked={isOnline}
+            onChange={(e) => setIsOnline(e.target.checked)}
+          />
+          {T.onlineOrder}
+        </label>
       </div>
 
       <fieldset className="mb-4">
@@ -424,14 +456,16 @@ export default function OrderForm() {
           {busy ? <Spinner className="h-4 w-4" /> : null}
           {busy ? T.creating : `${T.createOrder} (Ctrl+Enter)`}
         </button>
-        <button
-          type="button"
-          className="btn-secondary flex-1"
-          disabled={busy}
-          onClick={() => submit(true)}
-        >
-          {T.createArchived} (F3)
-        </button>
+        {!admin && (
+          <button
+            type="button"
+            className="btn-secondary flex-1"
+            disabled={busy}
+            onClick={() => submit(true)}
+          >
+            {T.createArchived} (F3)
+          </button>
+        )}
       </div>
     </form>
   );

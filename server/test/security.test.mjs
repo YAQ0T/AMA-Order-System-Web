@@ -1,6 +1,7 @@
 // Accounts, sessions and input checks, against the REAL server + MySQL.
 // Run through `npm run test:integration`. Expects an empty database.
 import { createRequire } from 'node:module';
+import os from 'node:os';
 import jwtLib from '../node_modules/jsonwebtoken/index.js';
 
 const require = createRequire(import.meta.url);
@@ -183,6 +184,16 @@ console.log('\nInput checks (a clear 400, never a 500)');
     ['a quantity of 10,000,000', { items: [{ name: 'سكر', quantity: 1e7 }] }, /Invalid quantity/],
     ['a negative price', { items: [{ name: 'سكر', quantity: 1, price: -5 }] }, /Invalid price/],
     ['a price of 100,000,000', { items: [{ name: 'سكر', quantity: 1, price: 1e8 }] }, /Invalid price/],
+    // Malformed rows the app never sends: these used to crash -> 500.
+    ['an item that is null', { items: [null] }, /^Item 1 is invalid$/],
+    ['an item that is just text', { items: ['سكر'] }, /^Item 1 is invalid$/],
+    ['an item name that is an object', { items: [{ name: { a: 1 }, quantity: 1 }] }, /^Item 1 is invalid$/],
+    ['a quantity that is true', { items: [{ name: 'سكر', quantity: true }] }, /^Item 1 is invalid$/],
+    ['a quantity that is a list', { items: [{ name: 'سكر', quantity: [2] }] }, /^Item 1 is invalid$/],
+    ['an item status that does not exist', { items: [{ name: 'سكر', quantity: 1, status: 'stolen' }] }, /^Item 1 is invalid$/],
+    ['a quantity that rounds to 0 (0.0004)', { items: [{ name: 'سكر', quantity: 0.0004 }] }, /Invalid quantity/],
+    ['items that are not a list', { items: 'سكر' }, /^Items must be a list$/],
+    ['a taker id of `true` (it used to mean user #1)', { assignedTakerIds: [true] }, /^Invalid taker selection$/],
   ];
   for (const [label, over, re] of cases) {
     const r = await make(over);
@@ -206,6 +217,108 @@ console.log('\nBrowser hardening');
   ok(r.headers.get('x-content-type-options') === 'nosniff' && r.headers.get('x-frame-options') === 'DENY', 'nosniff and no-framing headers are sent');
   ok(!r.headers.get('x-powered-by'), 'the server does not advertise Express');
   ok(r.data?.db === 'ready', '/api/health reports the database as ready');
+
+  const csp = r.headers.get('content-security-policy') || '';
+  ok(csp.includes("script-src 'self'") && csp.includes("connect-src 'self'") && csp.includes("frame-ancestors 'none'"),
+    'Content-Security-Policy: only the app\'s own scripts, only this server, no framing', csp);
+  ok(!/script-src[^;]*unsafe/.test(csp), 'and no unsafe-inline / unsafe-eval for scripts');
+  ok((r.headers.get('permissions-policy') || '').includes('camera=()'), 'Permissions-Policy: no camera / microphone / location');
+  ok(!r.headers.get('strict-transport-security'), 'no HSTS on plain http (the LAN address keeps working over http)');
+  const online = await call('GET', '/api/health', { headers: { 'X-Forwarded-Proto': 'https', 'X-Forwarded-For': '203.0.113.20' } });
+  ok(/max-age=\d+/.test(online.headers.get('strict-transport-security') || ''), 'HSTS on the online https link (through the tunnel)', online.headers.get('strict-transport-security'));
+  // Only the tunnel, connecting from this computer, is believed about https.
+  const lanIp = Object.values(os.networkInterfaces()).flat().find((e) => e && e.family === 'IPv4' && !e.internal)?.address;
+  if (lanIp) {
+    const lan = await fetch(`http://${lanIp}:${new URL(BASE).port}/api/health`, { headers: { 'X-Forwarded-Proto': 'https' } });
+    ok(lan.status === 200 && !lan.headers.get('strict-transport-security'),
+      `a LAN device (${lanIp}) claiming "https" in a header gets no HSTS`, `${lan.status} ${lan.headers.get('strict-transport-security')}`);
+  } else {
+    console.log('  - (no LAN address on this computer: the LAN header check is skipped)');
+  }
+}
+
+// ---- what an error answer may contain ----------------------------------------------------
+console.log('\nError answers (no internal details)');
+{
+  const maker = await login('maker1');
+  const leaks = (text) => /node_modules|[A-Za-z]:\\|\/server\/|\bat [\w.<>]+ \(|SELECT |INSERT |Sequelize|ER_[A-Z_]+/.test(text);
+
+  const rawSend = async (path, body, method = 'POST') => {
+    const res = await fetch(BASE + path, { method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${maker}` }, body });
+    return { status: res.status, text: await res.text(), type: res.headers.get('content-type') || '' };
+  };
+  const broken = await rawSend('/api/orders', '{"title": "x", ');
+  ok(broken.status === 400 && broken.type.includes('json') && JSON.parse(broken.text).error === 'Invalid request',
+    'a body that is not valid JSON -> 400 {"error":"Invalid request"}', `${broken.status} ${broken.text.slice(0, 80)}`);
+  ok(!leaks(broken.text) && !broken.text.includes('<'), 'not Express\'s HTML page with the stack trace and file paths (as before)', broken.text.slice(0, 120));
+  const huge = await rawSend('/api/orders', JSON.stringify({ title: 'x', description: 'و'.repeat(120_000) }));
+  ok(huge.status === 413 && huge.type.includes('json'), 'a body over 100 KB -> 413 JSON', `${huge.status}`);
+  const badUrl = await fetch(`${BASE}/api/orders/%E0%A4%A`, { headers: { Authorization: `Bearer ${maker}` } });
+  const badUrlText = await badUrl.text();
+  ok(badUrl.status === 400 && !leaks(badUrlText) && !badUrlText.includes('<'), 'a broken address (bad % escape) -> 400 JSON, no stack trace', `${badUrl.status} ${badUrlText.slice(0, 80)}`);
+  const nowhere = await call('GET', '/api/no-such-thing', { token: maker });
+  ok(nowhere.status === 404 && nowhere.data?.error === 'Not found', 'an /api address that does not exist -> 404 JSON', `${nowhere.status}`);
+
+  // A real fault inside a route: hide a table for a moment. The answer must be
+  // the fixed message; the SQL error (table and database names) stays in the log.
+  const testDb = process.env.AMA_TEST_DB || '';
+  if (testDb.endsWith('_test')) {
+    const mysql = require('mysql2/promise');
+    const db = await mysql.createConnection({
+      host: process.env.DB_HOST || 'localhost', port: Number(process.env.DB_PORT) || 3306,
+      user: process.env.DB_USER, password: process.env.DB_PASSWORD, database: testDb,
+    });
+    await db.query('RENAME TABLE `Notifications` TO `Notifications_hidden`');
+    let fault;
+    try {
+      fault = await fetch(`${BASE}/api/notifications`, { headers: { Authorization: `Bearer ${maker}` } });
+      fault = { status: fault.status, text: await fault.text() };
+    } finally {
+      await db.query('RENAME TABLE `Notifications_hidden` TO `Notifications`');
+      await db.end();
+    }
+    ok(fault.status === 500 && JSON.parse(fault.text).error === 'Server error', 'a database fault -> 500 {"error":"Server error"}', `${fault.status} ${fault.text.slice(0, 100)}`);
+    ok(!leaks(fault.text) && !fault.text.includes('Notifications') && !fault.text.includes(testDb),
+      'with no SQL, table or database name in it (it used to send the raw error text)', fault.text.slice(0, 150));
+    ok((await call('GET', '/api/notifications', { token: maker })).status === 200, 'setup: the table is back');
+  } else {
+    ok(false, 'AMA_TEST_DB is not a _test database - run this through npm run test:integration');
+  }
+
+  // Query strings the app never sends must not upset anything.
+  const twice = await call('GET', '/api/orders/maker?status=all&status=archived&search=a&search=b', { token: maker });
+  ok(twice.status === 200, 'a query value given twice -> fine, the first one counts', `${twice.status} ${JSON.stringify(twice.data).slice(0, 80)}`);
+  const nested = await call('GET', '/api/orders/maker?search[x]=1&status[gt]=a&city[]=x', { token: maker });
+  ok(nested.status === 200, '"?search[x]=1" is plain text, never an object (used to be a 500)', `${nested.status} ${JSON.stringify(nested.data).slice(0, 80)}`);
+  const negative = await call('GET', '/api/orders/maker?status=all&limit=-5&offset=-10', { token: maker });
+  ok(negative.status === 200 && negative.data?.pagination?.offset === 0, 'a negative limit or offset is clamped (used to be an SQL error)', `${negative.status} ${JSON.stringify(negative.data?.pagination)}`);
+  const sug = await call('GET', '/api/items/suggestions?q=a&q=b', { token: maker });
+  ok(sug.status === 200 && Array.isArray(sug.data), 'item suggestions with q twice -> fine', `${sug.status}`);
+  const adminLogs = await call('GET', '/api/admin/logs?limit=abc', { token: admin });
+  ok(adminLogs.status === 200, 'admin logs with a limit that is not a number -> fine', `${adminLogs.status}`);
+}
+
+// ---- push subscriptions --------------------------------------------------------------------
+console.log('\nPush subscriptions (the server sends requests to these addresses)');
+{
+  const maker = await login('maker1');
+  const sub = (body) => call('POST', '/api/notifications/subscribe', { token: maker, body });
+  const keys = { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' };
+  for (const [label, endpoint] of [
+    ['this computer', 'http://127.0.0.1:6001/api/admin/backups'],
+    ['a LAN address', 'https://192.168.1.10/'],
+    ['plain http', 'http://fcm.googleapis.com/fcm/send/x'],
+    ['a look-alike name', 'https://fcm.googleapis.com.evil.example/x'],
+    ['not an address at all', 'nonsense'],
+  ]) {
+    const r = await sub({ endpoint, keys });
+    ok(r.status === 400, `a subscription pointing at ${label} is refused`, `${r.status}`);
+  }
+  const noKeys = await sub({ endpoint: 'https://fcm.googleapis.com/fcm/send/abc' });
+  ok(noKeys.status === 400, 'one without keys -> 400 (it used to crash: 500)', `${noKeys.status}`);
+  ok((await sub(null)).status === 400, 'an empty body -> 400');
+  const good = await sub({ endpoint: 'https://fcm.googleapis.com/fcm/send/abc123', keys });
+  ok(good.status === 201, 'a real browser push service (Chrome / Firefox / Edge / Safari) is accepted', `${good.status}`);
 }
 
 // ---- reachable from outside only through a tunnel ------------------------------------------

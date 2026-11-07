@@ -143,6 +143,7 @@ export const T = {
   users: 'المستخدمون',
   orders: 'الطلبات',
   logs: 'السجلات',
+  includeOrderChanges: 'مع كل تعديلات الطلبات',
   completed: 'المكتملة',
   enteredErp: 'المُدخلة إلى ERP',
 
@@ -305,6 +306,15 @@ export const T = {
   atLeastOneItem: 'يجب إضافة صنف واحد على الأقل',
   needTaker: 'اختر مجهّزاً واحداً على الأقل، أو اجعل الطلب مفتوحاً لأي مجهّز',
   needAccounter: 'اختر محاسباً للطلبات النشطة',
+
+  // Order marks
+  onlineOrder: 'طلب أونلاين',
+  onlineOrderHint: 'الطلب جاي أونلاين — بيظهر بلون أزرق مميّز عند الكل.',
+  urgentOrder: 'ضروري',
+  urgentOrderLong: 'طلب ضروري',
+  adminOrdersUrgent: 'طلبات المدير بتطلع ضرورية: باللون الأحمر، وبأول قائمة المجهّزين، و🔴 برسائل تيليغرام.',
+  newUrgentOrder: 'طلب جديد (ضروري)',
+  hideForm: 'إخفاء النموذج',
 
   // Open orders - left for any taker; the first to take it gets it
   openToAll: 'مفتوح لأي مجهّز',

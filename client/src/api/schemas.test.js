@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { orderSchema, orderItemSchema, orderListSchema, userSchema } from './schemas';
+import { orderSchema, orderItemSchema, orderListSchema, userSchema, statsSchema, activityListSchema } from './schemas';
 import { itemsPayload } from './orders';
 
 describe('orderItemSchema', () => {
@@ -100,5 +100,34 @@ describe('itemsPayload', () => {
     const payload = itemsPayload(items);
     expect(payload).toHaveLength(3);
     expect(payload.map((i) => [i.name, i.quantity])).toEqual([['a', 1], ['b', 2.5], ['c', 3]]);
+  });
+});
+
+describe('admin overview and logs', () => {
+  it('reads the overview when each recent entry names the person only (it showed all zeros)', () => {
+    const stats = statsSchema.parse({
+      totalUsers: 5, pendingApprovals: 0, totalOrders: 3, activeOrders: 3, usersByRole: { maker: 2 },
+      recentActivity: [{ id: 20, action: 'user_login', targetType: 'user', targetId: 1, User: { username: 'admin' } }],
+    });
+    expect(stats.totalOrders).toBe(3);
+    expect(stats.recentActivity).toHaveLength(1);
+    expect(stats.recentActivity[0].User.username).toBe('admin');
+  });
+
+  it('leaves out an entry it cannot read instead of failing the whole list', () => {
+    const errors = console.error;
+    console.error = () => {};
+    try {
+      const list = activityListSchema.parse([{ id: 1, action: 'user_login' }, 'nonsense', { id: 'x?', action: 'order_created' }, { id: 3, action: 'order_deleted' }]);
+      expect(list.map((e) => e.id)).toEqual([1, 3]);
+    } finally {
+      console.error = errors;
+    }
+  });
+
+  it('takes the person from the lower-case user field of the full log', () => {
+    const [entry] = activityListSchema.parse([{ type: 'order_change', action: 'order_change', user: { id: 4, username: 'taker1' }, details: { new: 'Removed: سكر' } }]);
+    expect(entry.User.username).toBe('taker1');
+    expect(entry.type).toBe('order_change');
   });
 });

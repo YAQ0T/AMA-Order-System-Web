@@ -1,6 +1,7 @@
 const express = require('express');
 const { Notification, PushSubscription } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
+const { sendServerError } = require('../utils/serverError');
 
 const router = express.Router();
 
@@ -10,10 +11,33 @@ router.get('/vapid-public-key', (req, res) => {
     res.json({ key, enabled: Boolean(key) });
 });
 
+// The server sends each push as a request to the subscription's "endpoint"
+// address, so only the browsers' own push services are accepted there.
+// Otherwise any logged-in user could make the server send requests to an
+// address of their choosing - including machines on the company network.
+const PUSH_SERVICE_HOSTS = ['.googleapis.com', '.mozilla.com', '.mozaws.net', '.windows.com', '.apple.com'];
+const validSubscription = (sub) => {
+    if (!sub || typeof sub !== 'object') return false;
+    const { endpoint, keys } = sub;
+    if (typeof endpoint !== 'string' || endpoint.length > 2048) return false;
+    if (!keys || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string') return false;
+    if (keys.p256dh.length > 200 || keys.auth.length > 100) return false;
+    let url;
+    try {
+        url = new URL(endpoint);
+    } catch {
+        return false;
+    }
+    return url.protocol === 'https:' && PUSH_SERVICE_HOSTS.some((suffix) => url.hostname.endsWith(suffix));
+};
+
 // Subscribe to push notifications
 router.post('/subscribe', authenticateToken, async (req, res) => {
     try {
         const subscription = req.body;
+        if (!validSubscription(subscription)) {
+            return res.status(400).json({ error: 'Invalid push subscription' });
+        }
 
         // Check if subscription already exists
         const existing = await PushSubscription.findOne({
@@ -37,8 +61,7 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
 
         res.status(201).json({ message: 'Subscribed successfully' });
     } catch (error) {
-        console.error('Error subscribing:', error);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'POST /api/notifications/subscribe');
     }
 });
 
@@ -52,7 +75,7 @@ router.get('/', authenticateToken, async (req, res) => {
         });
         res.json(notifications);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/notifications');
     }
 });
 
@@ -70,7 +93,7 @@ router.put('/:id/read', authenticateToken, async (req, res) => {
         await notification.save();
         res.json(notification);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'PUT /api/notifications/:id/read');
     }
 });
 
@@ -83,7 +106,7 @@ router.put('/read-all', authenticateToken, async (req, res) => {
         );
         res.json({ message: 'All marked as read' });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'PUT /api/notifications/read-all');
     }
 });
 

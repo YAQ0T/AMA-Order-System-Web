@@ -53,6 +53,59 @@ const findAvailablePort = async (preferredPort, attempts = 10) => {
 // what the login throttling and the logs see. Nobody else's header is trusted.
 app.set('trust proxy', 'loopback');
 
+// Every query value is one plain string. With Express's default parser
+// "?status=a&status=b" arrives as a list and "?status[x]=a" as an object,
+// which no route expects - they used to end in a 500. The first value wins.
+app.set('query parser', (text) => {
+    const query = Object.create(null);
+    for (const [key, value] of Object.entries(require('querystring').parse(text))) {
+        query[key] = Array.isArray(value) ? value[0] : value;
+    }
+    return query;
+});
+
+// Browser hardening, sent with every answer (first, so error answers get it too):
+//  - nosniff: a file is only ever treated as the type it is sent as.
+//  - X-Frame-Options / frame-ancestors: no other site can show the app inside
+//    its own page (clickjacking).
+//  - Referrer-Policy: addresses inside the app are not passed to other sites.
+//  - Content-Security-Policy: the page may only run the app's own scripts and
+//    talk to this server, so markup injected somehow cannot load or send
+//    anything elsewhere. Inline styles stay allowed: printing writes a <style>
+//    block into a blank frame (client/src/print/printOrders.js).
+//  - Permissions-Policy: no camera, microphone or location, ever.
+//  - Strict-Transport-Security, only on the online https link (req.secure is
+//    true behind the tunnel - see 'trust proxy' above): browsers then refuse
+//    plain http for that name. LAN addresses are plain http and never get it.
+const CONTENT_SECURITY_POLICY = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "connect-src 'self'",
+    "worker-src 'self'",
+    "manifest-src 'self'",
+    "frame-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'"
+].join('; ');
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+    res.set({
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY',
+        'Referrer-Policy': 'same-origin',
+        'Content-Security-Policy': CONTENT_SECURITY_POLICY,
+        'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+        'Cross-Origin-Opener-Policy': 'same-origin'
+    });
+    if (req.secure) res.set('Strict-Transport-Security', 'max-age=31536000');
+    next();
+});
+
 // Answer only the local network and this computer - see middleware/lanOnly.js.
 app.use(require('./middleware/lanOnly').lanOnly());
 
@@ -63,19 +116,10 @@ const corsOrigins = (process.env.CORS_ORIGINS || '').split(',').map((o) => o.tri
 app.use(cors({
     origin: (origin, done) => done(null, Boolean(origin) && corsOrigins.includes(origin))
 }));
+// Request bodies are JSON, at most 100 KB (Express's default) - far more than
+// any order needs. A body that is not valid JSON is answered by the error
+// handler at the end of this file.
 app.use(express.json());
-
-// Basic browser hardening: no MIME sniffing, the app cannot be framed by
-// another site (clickjacking), and URLs are not leaked to other sites.
-app.disable('x-powered-by');
-app.use((req, res, next) => {
-    res.set({
-        'X-Content-Type-Options': 'nosniff',
-        'X-Frame-Options': 'DENY',
-        'Referrer-Policy': 'same-origin'
-    });
-    next();
-});
 
 // A stray rejected promise (a Telegram call, a log write) must not take the
 // whole system down: Node's default for an unhandled rejection is to exit.
@@ -182,6 +226,31 @@ const syncDatabase = async () => {
         console.error('Could not check for legacy columns:', error.message);
     }
 
+    // 3b) Columns added after the first release. sync() creates them on a new
+    //     database but never adds them to an existing table, so add them here.
+    //     Unlike the check above this is not optional: every order query reads
+    //     these columns, so a failure is reported as a database error (the
+    //     launcher then shows it) instead of leaving a half-working server.
+    try {
+        const queryInterface = sequelize.getQueryInterface();
+        const orderTable = await queryInterface.describeTable('Orders');
+        for (const column of ['isOnline', 'isUrgent']) {
+            if (!orderTable[column]) {
+                await queryInterface.addColumn('Orders', column, {
+                    type: DataTypes.BOOLEAN,
+                    allowNull: false,
+                    defaultValue: false
+                });
+                console.log(`Added ${column} column to Orders table`);
+            }
+        }
+    } catch (error) {
+        console.error('Could not add the new Orders columns:', error.message);
+        dbState.state = 'error';
+        dbState.code = 'MIGRATION_FAILED';
+        return;
+    }
+
     // 4) Schema alteration is OPT-IN, and deliberately off by default.
     //
     //    These calls exist to migrate old installs that lack columns added
@@ -273,6 +342,10 @@ app.get('/api/health', (req, res) => {
     res.json({ ok: true, time: new Date().toISOString(), db: dbState.state, dbCode: dbState.code, instance: INSTANCE_ID });
 });
 
+// An /api address that does not exist gets a JSON answer like every other API
+// reply (instead of Express's "Cannot GET" page, or the app's index.html).
+app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
+
 // Serve the built React client from client/dist when it has been built.
 // This makes the whole app single-origin: no CORS, no VITE_API_URL to configure.
 const path = require('path');
@@ -290,6 +363,21 @@ if (fs.existsSync(path.join(clientDist, 'index.html'))) {
 } else {
     console.log('No client build found at', clientDist, '- run `npm run build` in client/ to serve it from here.');
 }
+
+// Last stop for errors nothing else answered: a request body that is not
+// valid JSON, one that is too big, or a fault inside a route. Express's own
+// answer is an HTML page with the whole stack trace (file paths and all) for
+// anyone to read; this one is a short JSON message, the details go to the log.
+const { sendServerError } = require('./utils/serverError');
+// Express recognises an error handler by its four parameters.
+app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid request' });
+    if (err.type === 'entity.too.large') return res.status(413).json({ error: 'Request is too large' });
+    const status = err.status || err.statusCode;
+    if (status >= 400 && status < 500) return res.status(status).json({ error: 'Invalid request' });
+    sendServerError(res, err, `${req.method} ${req.path}`);
+});
 
 // Export for routes to use
 module.exports = { app, sequelize };

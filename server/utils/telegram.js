@@ -15,7 +15,8 @@
  * still gets the in-app notification (the bell) that every assignment creates,
  * but nothing on their phone. That is why the app nags unlinked takers.
  *
- * Config: TELEGRAM_BOT_TOKEN in server/.env. Unset = feature off.
+ * Config: TELEGRAM_BOT_TOKEN in server/.env. Unset = feature off. TELEGRAM=off
+ * also switches it off (the dev scripts set that - see switchedOff below).
  *         APP_URL (optional) adds an "open the system" button to messages.
  *         TELEGRAM_API_BASE (optional) points at a fake API in tests.
  */
@@ -33,7 +34,11 @@ let warnedConflict = false;
 
 const token = () => process.env.TELEGRAM_BOT_TOKEN || '';
 const apiBase = () => (process.env.TELEGRAM_API_BASE || 'https://api.telegram.org').replace(/\/$/, '');
-const enabled = () => Boolean(token());
+// TELEGRAM=off switches the bot off even when a token is set. The dev scripts
+// (npm run dev, scripts/start-dev) set it: only ONE program may read the bot's
+// messages, and a developer's copy must never take them from the real system.
+const switchedOff = () => String(process.env.TELEGRAM || '').toLowerCase() === 'off';
+const enabled = () => Boolean(token()) && !switchedOff();
 const getBotUsername = () => botUsername;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -93,6 +98,14 @@ async function ensureBotUsername() {
 
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+// Older orders carry an English filler description the server used to save
+// when none was typed ("Order with 3 items"). It is not shown - same rule as
+// orderDescription() in the web client.
+const description = (order) => {
+    const text = (order.description || '').trim();
+    return /^(?:Order with \d+ items?|New Order)$/.test(text) ? '' : text;
+};
+
 // Order numbers sit inside right-to-left text, where bidi reordering can turn
 // "#123" into "123#". Unicode isolates keep them intact, the same job the
 // web app's <Ltr> wrapper does.
@@ -104,6 +117,15 @@ const formatQty = (n) => {
     return x % 1 === 0 ? String(Math.trunc(x)) : String(x);
 };
 
+/** "🔴 طلب ضروري · 🌐 طلب أونلاين" for an order that carries those marks, else null. */
+function marksLine(order) {
+    const marks = [
+        order.isUrgent ? '🔴 <b>طلب ضروري</b>' : null,
+        order.isOnline ? '🌐 <b>طلب أونلاين</b>' : null,
+    ].filter(Boolean);
+    return marks.length ? marks.join(' · ') : null;
+}
+
 function orderDetails(order, actor) {
     const items = order.Items || [];
     // Item names and quantities only - takers never see prices.
@@ -113,28 +135,32 @@ function orderDetails(order, actor) {
     }
 
     return [
+        marksLine(order),
         `👤 الزبون: <b>${esc(order.title || '—')}</b>`,
         `📍 المدينة: ${esc(order.city || '—')}`,
         actor ? `✍️ من: ${esc(actor.username)}` : null,
-        order.description ? `📝 ${esc(order.description)}` : null,
+        description(order) ? `📝 ${esc(description(order))}` : null,
         '',
         `📦 الأصناف (${ltr(items.length)}):`,
         ...lines,
     ].filter((l) => l !== null);
 }
 
+// The first line is what a phone shows in the notification, so urgency goes there too.
+const urgent = (order) => (order.isUrgent ? '🔴 ' : '');
+
 function orderAssignedMessage(order, maker) {
-    return [`🆕 <b>طلب جديد ${ltr(`#${order.id}`)}</b>`, '', ...orderDetails(order, maker)].join('\n');
+    return [`${urgent(order)}🆕 <b>طلب جديد ${ltr(`#${order.id}`)}</b>`, '', ...orderDetails(order, maker)].join('\n');
 }
 
 function orderUpdatedMessage(order, editor) {
-    return [`✏️ <b>تعديل على الطلب ${ltr(`#${order.id}`)}</b>`, '', ...orderDetails(order, editor)].join('\n');
+    return [`${urgent(order)}✏️ <b>تعديل على الطلب ${ltr(`#${order.id}`)}</b>`, '', ...orderDetails(order, editor)].join('\n');
 }
 
 /** An order left open to any taker: the first to take it in the app gets it. */
 function openOrderMessage(order, maker) {
     return [
-        `🔓 <b>طلب مفتوح ${ltr(`#${order.id}`)}</b>`,
+        `${urgent(order)}🔓 <b>طلب مفتوح ${ltr(`#${order.id}`)}</b>`,
         'أول مجهّز يأخذه من النظام يصبح له.',
         '',
         ...orderDetails(order, maker),
@@ -182,6 +208,7 @@ function orderReadyForErpMessage(order) {
     return [
         `✅ <b>طلب جاهز للإدخال على ERP ${ltr(`#${order.id}`)}</b>`,
         '',
+        marksLine(order),
         `👤 الزبون: <b>${esc(order.title || '—')}</b>`,
         `📍 المدينة: ${esc(order.city || '—')}`,
         takers.length ? `🧺 ${takers.length > 1 ? 'المجهّزون' : 'المجهّز'}: ${esc(takers.join('، '))}` : null,
@@ -485,7 +512,9 @@ async function pollLoop() {
 
 async function start() {
     if (!enabled()) {
-        console.log('[telegram] TELEGRAM_BOT_TOKEN not set - Telegram notifications are disabled.');
+        console.log(switchedOff()
+            ? '[telegram] switched off (TELEGRAM=off, as the dev scripts set it) - no Telegram messages from this copy.'
+            : '[telegram] TELEGRAM_BOT_TOKEN not set - Telegram notifications are disabled.');
         return;
     }
     if (polling) return;

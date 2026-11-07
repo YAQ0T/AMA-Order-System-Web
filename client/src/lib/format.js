@@ -118,3 +118,14 @@ export function orderTitle(order) {
   const title = (order?.title || '').trim();
   return title || `طلب #${order?.id ?? ''}`;
 }
+
+// Until November 2026 the server saved an English filler description when
+// none was typed ("Order with 3 items"). It says nothing the item list does
+// not, so on those older orders it counts as no description.
+const FILLER_DESCRIPTION = /^(?:Order with \d+ items?|New Order)$/;
+
+/** The order's description as typed, or '' (none, or the old English filler). */
+export function orderDescription(order) {
+  const text = (order?.description || '').trim();
+  return FILLER_DESCRIPTION.test(text) ? '' : text;
+}

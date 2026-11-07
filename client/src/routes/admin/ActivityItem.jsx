@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import { T, roleLabel } from '../../lib/labels';
 import { formatDateTime } from '../../lib/format';
+import { historyText } from '../../lib/historyText';
 import { Ltr } from '../../components/ui';
 
 /**
@@ -29,6 +30,8 @@ const ACTION_LABELS = {
   user_password_changed: 'تغيير كلمة المرور',
   user_password_reset: 'تعيين كلمة مرور لمستخدم',
   backup_downloaded: 'تنزيل نسخة احتياطية',
+  // From the full log (/api/admin/logs/all): one line of an order's history.
+  order_change: 'تعديل على طلب',
 };
 
 export const actionLabel = (action) =>
@@ -66,6 +69,10 @@ export default function ActivityItem({ log }) {
           <Ltr>{formatDateTime(log.createdAt)}</Ltr>
         </span>
       </div>
+
+      {log.action === 'order_change' && typeof log.details?.new === 'string' && (
+        <p className="mt-0.5 text-xs text-slate-600 dark:text-ink-400">{historyText(log.details.new)}</p>
+      )}
 
       {hasDetails && (
         <>

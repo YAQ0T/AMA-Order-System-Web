@@ -5,10 +5,10 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
+    "dev": "cross-env TELEGRAM=off nodemon index.js",
     "db:check": "node check-db.js",
     "db:create": "node create-db.js",
-    "dev:alt-port": "cross-env PORT=3004 nodemon index.js",
+    "dev:alt-port": "cross-env PORT=3004 TELEGRAM=off nodemon index.js",
     "test:integration": "node test/run-integration.js",
     "db:restore": "node restore-db.js",
     "db:backup": "node backup-db.js"

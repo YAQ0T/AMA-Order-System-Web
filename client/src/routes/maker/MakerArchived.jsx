@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 
 import OrderFilters from '../../components/OrderFilters';
 import OrderEditModal from '../../components/OrderEditModal';
+import OrderMarks from '../../components/OrderMarks';
 import Pagination from '../../components/Pagination';
 import { ConfirmDialog, EmptyState, ErrorState, Modal, Spinner, Ltr } from '../../components/ui';
 import { useToast } from '../../components/Toast';
@@ -39,7 +40,8 @@ function SendSheet({ open, onClose, onSend, count, busy }) {
   const { data: takers = [] } = useTakers(open);
   const { data: accounters = [] } = useAccounters(open);
   const [takerIds, setTakerIds] = useState([]);
-  const [openToAll, setOpenToAll] = useState(false);
+  // Open to any taker by default, as in the order form.
+  const [openToAll, setOpenToAll] = useState(true);
   const [accounterId, setAccounterId] = useState('');
 
   const canSend = (openToAll || takerIds.length > 0) && accounterId !== '';
@@ -292,7 +294,10 @@ export default function MakerArchived() {
                       aria-label={orderTitle(order)}
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-bold">{orderTitle(order)}</p>
+                      <p className="flex min-w-0 items-center gap-1.5 text-sm font-bold">
+                        <span className="truncate">{orderTitle(order)}</span>
+                        <OrderMarks order={order} />
+                      </p>
                       <p className="text-xs text-slate-500 dark:text-ink-400">
                         {T.itemCount(order.Items?.length || 0)} — {T.createdOn}{' '}
                         <Ltr>{formatDate(order.createdAt)}</Ltr>

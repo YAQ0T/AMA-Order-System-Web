@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
-# Stops whatever is serving the API (6001) and the client (5173).
+# Stops the dev or mock servers: whatever node process serves the API (port
+# 6001) and the client (5173). stop-mock.sh runs this same script.
 #
-# start-dev.sh traps EXIT and stops both on Ctrl+C, so this is for the case
-# where it was backgrounded, the terminal was closed, or a server was started
-# by hand and left running.
+# start-dev.sh / start-mock.sh already stop both on Ctrl+C, so this is for the
+# case where one was backgrounded, the terminal was closed, or a server was
+# started by hand and left running.
 #
-# Only kills the process if it is actually node, mirroring the port fallback in
-# the Flutter repo's stop_ama.command.
+# It only stops node processes, never something else on those ports. And it
+# never stops the REAL system started with "Start AMA" (also node on 6001):
+# that one is recorded in .ama_runtime/server.pid and left for "Stop AMA".
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+AMA_PID=""
+if [ -f "$ROOT/.ama_runtime/server.pid" ]; then
+  AMA_PID="$(tr -d '[:space:]' < "$ROOT/.ama_runtime/server.pid")"
+fi
 
 stop_port() {
   local name="$1" port="$2" found=""
@@ -22,6 +30,12 @@ stop_port() {
 
   for pid in $pids; do
     [ -z "$pid" ] && continue
+
+    if [ -n "$AMA_PID" ] && [ "$pid" = "$AMA_PID" ]; then
+      log "Port $port is the real system (started with Start AMA, PID $pid) - left alone. Use Stop AMA for it."
+      found=1
+      continue
+    fi
 
     local comm=""
     if command -v ps >/dev/null 2>&1; then

@@ -28,6 +28,20 @@ module.exports = (sequelize) => {
                 model: 'Users',
                 key: 'id'
             }
+        },
+        // An order that came in online (marked by its maker). Shown in its own
+        // colour everywhere the order appears.
+        isOnline: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: false
+        },
+        // Urgent: every order an admin creates. Shown in red, and first in the
+        // takers' lists. Only an admin can change it.
+        isUrgent: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: false
         }
     }, {
         indexes: [

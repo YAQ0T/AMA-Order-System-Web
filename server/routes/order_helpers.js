@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const { Order, OrderLog, User, sequelize } = require('../db');
+const { badRequest } = require('../utils/serverError');
 
 /**
  * An "open" order is active (pending) with no taker assigned: any taker may
@@ -16,27 +17,20 @@ const isOpenOrder = (order) =>
  * "assigned" to an order and the order would silently reach nobody.
  */
 const assertTakerIds = async (ids, { transaction } = {}) => {
-    if (!Array.isArray(ids)) {
-        const err = new Error('assignedTakerIds must be a list');
-        err.status = 400;
-        throw err;
+    if (!Array.isArray(ids)) throw badRequest('assignedTakerIds must be a list');
+    // Only whole numbers or their text: Number(true) is 1, which would quietly
+    // pick user #1.
+    if (ids.some((id) => typeof id !== 'number' && typeof id !== 'string')) {
+        throw badRequest('Invalid taker selection');
     }
     const unique = [...new Set(ids.map(Number))];
-    if (unique.some((id) => !Number.isInteger(id))) {
-        const err = new Error('Invalid taker selection');
-        err.status = 400;
-        throw err;
-    }
+    if (unique.some((id) => !Number.isInteger(id) || id <= 0)) throw badRequest('Invalid taker selection');
     if (unique.length === 0) return unique;
     const found = await User.count({
         where: { id: unique, role: 'taker', isApproved: true },
         transaction
     });
-    if (found !== unique.length) {
-        const err = new Error('Invalid taker selection');
-        err.status = 400;
-        throw err;
-    }
+    if (found !== unique.length) throw badRequest('Invalid taker selection');
     return unique;
 };
 
@@ -48,15 +42,37 @@ const getItemAttributesForRole = (role) => {
     return baseAttributes;
 };
 
+// The values OrderItems.status (an ENUM) accepts; null is "not marked yet".
+const ITEM_STATUSES = new Set(['collected', 'unavailable']);
+
+/**
+ * Checks and tidies the items of an order. Anything wrong is thrown as a 400
+ * (badRequest) saying which item and what - the route sends that message on.
+ * Malformed input (a row that is not an object, a name that is a list...)
+ * must be refused the same way: it used to crash here and come back as a 500.
+ */
 const sanitizeItems = (items, { allowEmpty = false } = {}) => {
-    if (!Array.isArray(items)) return null;
+    if (!Array.isArray(items)) throw badRequest('Items must be a list');
 
     const cleaned = [];
     const seenNames = new Set();
     const numericPattern = /^(?:\d+\.?\d*|\.\d+)$/;
+    // A quantity or price is typed as text in the form, or sent as a number.
+    const isNumberLike = (v) => v === undefined || v === null || typeof v === 'string' || typeof v === 'number';
 
     for (const [index, rawItem] of items.entries()) {
-        const name = (rawItem.name || '').trim();
+        if (rawItem === null || typeof rawItem !== 'object' || Array.isArray(rawItem)) {
+            throw badRequest(`Item ${index + 1} is invalid`);
+        }
+        const rawName = typeof rawItem.name === 'number' ? String(rawItem.name) : rawItem.name;
+        if (rawName != null && typeof rawName !== 'string') {
+            throw badRequest(`Item ${index + 1} is invalid`);
+        }
+        if (!isNumberLike(rawItem.quantity) || !isNumberLike(rawItem.price)) {
+            throw badRequest(`Item ${index + 1} is invalid`);
+        }
+
+        const name = (rawName || '').trim();
         const priceRaw = typeof rawItem.price === 'string' ? rawItem.price.trim() : rawItem.price;
         const quantityRaw = typeof rawItem.quantity === 'string' ? rawItem.quantity.trim() : rawItem.quantity;
 
@@ -66,28 +82,28 @@ const sanitizeItems = (items, { allowEmpty = false } = {}) => {
         }
 
         if (!name) {
-            throw new Error(`Item ${index + 1} is missing a name`);
+            throw badRequest(`Item ${index + 1} is missing a name`);
         }
         // OrderItems.name is VARCHAR(255). MySQL refuses longer values outright,
         // which used to surface as a bare 500.
         if (name.length > 255) {
-            throw new Error(`Item name is too long (max 255 characters): "${name.slice(0, 40)}..."`);
+            throw badRequest(`Item name is too long (max 255 characters): "${name.slice(0, 40)}..."`);
         }
 
         if (typeof quantityRaw === 'string' && !numericPattern.test(quantityRaw)) {
-            throw new Error(`Invalid quantity for "${name}"`);
+            throw badRequest(`Invalid quantity for "${name}"`);
         }
         const quantityNum = Number(quantityRaw);
         const hasPrice = priceRaw !== '' && priceRaw !== undefined && priceRaw !== null;
         let priceNum = null;
         if (hasPrice) {
             if (typeof priceRaw === 'string' && !numericPattern.test(priceRaw)) {
-                throw new Error(`Invalid price for "${name}"`);
+                throw badRequest(`Invalid price for "${name}"`);
             }
             const priceNumRaw = Number(priceRaw);
             // DECIMAL(10,2): at most 99,999,999.99.
             if (!Number.isFinite(priceNumRaw) || priceNumRaw < 0 || priceNumRaw >= 1e8) {
-                throw new Error(`Invalid price for "${name}"`);
+                throw badRequest(`Invalid price for "${name}"`);
             }
             priceNum = priceNumRaw;
         }
@@ -95,18 +111,22 @@ const sanitizeItems = (items, { allowEmpty = false } = {}) => {
             ? Math.round(quantityNum * 1000) / 1000
             : quantityNum;
 
-        // DECIMAL(10,3): at most 9,999,999.999.
-        if (!Number.isFinite(quantityNum) || quantityNum <= 0 || quantityNum >= 1e7) {
-            throw new Error(`Invalid quantity for "${name}"`);
+        // DECIMAL(10,3): at most 9,999,999.999. Checked after rounding to 3
+        // places, so 0.0004 (stored as 0) is refused too.
+        if (!Number.isFinite(quantityNum) || normalizedQuantity <= 0 || quantityNum >= 1e7) {
+            throw badRequest(`Invalid quantity for "${name}"`);
         }
 
         const normalizedName = name.toLowerCase();
         if (seenNames.has(normalizedName)) {
-            throw new Error(`Duplicate item "${name}"`);
+            throw badRequest(`Duplicate item "${name}"`);
         }
         seenNames.add(normalizedName);
 
         const status = rawItem.status === '' || rawItem.status === undefined ? null : rawItem.status ?? null;
+        if (status !== null && !ITEM_STATUSES.has(status)) {
+            throw badRequest(`Item ${index + 1} is invalid`);
+        }
 
         cleaned.push({
             name,
@@ -117,7 +137,7 @@ const sanitizeItems = (items, { allowEmpty = false } = {}) => {
     }
 
     if (!allowEmpty && cleaned.length === 0) {
-        throw new Error('Order must have at least one item');
+        throw badRequest('Order must have at least one item');
     }
 
     return cleaned;
@@ -182,9 +202,10 @@ const orderFieldsProblem = ({ title, description, city }) => {
     return null;
 };
 
+// A negative LIMIT or OFFSET is an SQL syntax error, so clamp rather than pass it on.
 const getPaginationParams = (req) => {
-    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 20);
-    const offset = parseInt(req.query.offset, 10) || 0;
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 20, 20));
+    const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
     return { limit, offset };
 };
 
@@ -323,7 +344,8 @@ const fetchOrdersForRole = async (req, effectiveRole, options = {}) => {
         result = await Order.findAndCountAll({
             where: takerWhere,
             include: includeOptions,
-            order: NEWEST_FIRST,
+            // A taker's list is a work queue: urgent (admin) orders on top.
+            order: [['isUrgent', 'DESC'], ...NEWEST_FIRST],
             limit,
             offset,
             distinct: true
@@ -340,7 +362,8 @@ const fetchOrdersForRole = async (req, effectiveRole, options = {}) => {
 
 /**
  * Open orders, for takers to pick from: pending with no assignment at all.
- * Oldest first, so the customer who has waited longest is served first.
+ * Urgent ones first; then oldest first, so the customer who has waited
+ * longest is served first.
  */
 const fetchOpenOrders = async (req) => {
     const { limit, offset } = getPaginationParams(req);
@@ -358,7 +381,7 @@ const fetchOpenOrders = async (req) => {
             id: { [Op.notIn]: sequelize.literal(`(SELECT ${orderIdCol} FROM ${assignments})`) }
         },
         include: buildOrderIncludes('taker', { includeHistory: false }),
-        order: [['createdAt', 'ASC'], ['id', 'ASC']],
+        order: [['isUrgent', 'DESC'], ['createdAt', 'ASC'], ['id', 'ASC']],
         limit,
         offset,
         distinct: true

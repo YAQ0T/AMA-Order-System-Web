@@ -76,6 +76,8 @@ const makeOrder = (index) => {
     city: CITIES[index % CITIES.length],
     makerId: 2,
     accounterId: status === 'archived' ? null : 5,
+    isOnline: index % 7 === 3,
+    isUrgent: status !== 'archived' && index % 9 === 4,
     createdAt: created.toISOString(),
     updatedAt: created.toISOString(),
     Maker: users[1],
@@ -181,6 +183,8 @@ function filterOrders(role, user, query) {
       [o.title, o.description, o.city].some((f) => (f || '').toLowerCase().includes(search))
     );
   }
+
+  if (role === 'taker') list = [...list].sort((a, b) => Number(b.isUrgent) - Number(a.isUrgent));
 
   const limit = Math.min(Number(query.get('limit')) || 20, 20);
   const offset = Number(query.get('offset')) || 0;
@@ -336,6 +340,8 @@ const server = http.createServer(async (req, res) => {
       city: body.city,
       status: body.status === 'archived' ? 'archived' : 'pending',
       makerId: user.id,
+      isOnline: body.isOnline === true,
+      isUrgent: user.role === 'admin',
       accounterId: body.accounterId ?? null,
       createdAt: new Date().toISOString(),
       Maker: user,
@@ -363,7 +369,7 @@ const server = http.createServer(async (req, res) => {
     if (user.role !== 'taker') return send(403, { error: 'Only takers can view open orders' });
     const open = orders
       .filter((o) => o.status === 'pending' && o.AssignedTakers.length === 0)
-      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+      .sort((a, b) => Number(b.isUrgent) - Number(a.isUrgent) || new Date(a.createdAt) - new Date(b.createdAt));
     const limit = Math.min(Number(searchParams.get('limit')) || 20, 20);
     const offset = Number(searchParams.get('offset')) || 0;
     return send(200, {
@@ -409,6 +415,15 @@ const server = http.createServer(async (req, res) => {
       // active order may only be left without one when that was asked for
       // (or it already was open); an order in progress released this way
       // starts over as pending.
+      if (body.isOnline !== undefined && user.role !== 'admin' && order.makerId !== user.id) {
+        return send(403, { error: 'Only makers or admins can change the online mark' });
+      }
+      if (body.isUrgent !== undefined && user.role !== 'admin') {
+        return send(403, { error: 'Only an admin can change the urgent mark' });
+      }
+      if (typeof body.isOnline === 'boolean') order.isOnline = body.isOnline;
+      if (typeof body.isUrgent === 'boolean') order.isUrgent = body.isUrgent;
+
       const wantsOpen = body.openToAll === true;
       if (wantsOpen && (body.assignedTakerIds || []).length > 0) {
         return send(400, { error: 'An open order cannot also be assigned to takers' });

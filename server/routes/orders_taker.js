@@ -5,6 +5,7 @@ const { fetchOrdersForRole, fetchOpenOrders, buildOrderIncludes } = require('./o
 const { logActivity } = require('../utils/activityLogger');
 const { logOrderEvent } = require('../utils/orderRequestLogger');
 const telegram = require('../utils/telegram');
+const { sendServerError } = require('../utils/serverError');
 
 const router = express.Router();
 
@@ -19,8 +20,7 @@ router.get('/taker', authenticateToken, async (req, res) => {
             pagination: { total: count, limit, offset }
         });
     } catch (error) {
-        console.error('Error fetching taker orders:', error);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/orders/taker');
     }
 });
 
@@ -36,8 +36,7 @@ router.get('/open', authenticateToken, async (req, res) => {
             pagination: { total: count, limit, offset }
         });
     } catch (error) {
-        console.error('Error fetching open orders:', error);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/orders/open');
     }
 });
 

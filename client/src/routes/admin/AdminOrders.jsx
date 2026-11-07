@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import OrderFilters from '../../components/OrderFilters';
+import OrderForm from '../../components/OrderForm';
 import OrderTable from '../../components/OrderTable';
 import OrderEditModal from '../../components/OrderEditModal';
 import Pagination from '../../components/Pagination';
@@ -22,6 +23,8 @@ export default function AdminOrders() {
   const [page, setPage] = useState(0);
   const [editing, setEditing] = useState(null);
   const [deleting, setDeleting] = useState(null);
+  // The admin's own orders are created here; the server marks them urgent.
+  const [creating, setCreating] = useState(false);
 
   const query = useOrdersQuery({
     status,
@@ -67,6 +70,23 @@ export default function AdminOrders() {
 
   return (
     <div>
+      {creating ? (
+        <div className="mb-2">
+          <div className="mb-2 flex justify-end">
+            <button type="button" className="btn-ghost text-xs" onClick={() => setCreating(false)}>
+              {T.hideForm}
+            </button>
+          </div>
+          <OrderForm admin />
+        </div>
+      ) : (
+        <div className="mb-4">
+          <button type="button" className="btn-danger" onClick={() => setCreating(true)}>
+            + {T.newUrgentOrder}
+          </button>
+        </div>
+      )}
+
       <OrderFilters
         status={status}
         onStatusChange={reset(setStatus)}

@@ -1,6 +1,7 @@
 const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
 const { fetchOrdersForRole } = require('./order_helpers');
+const { sendServerError } = require('../utils/serverError');
 
 const router = express.Router();
 
@@ -23,8 +24,7 @@ router.get('/accounter', authenticateToken, async (req, res) => {
 
         res.json({ orders: rows, pagination: { total: count, limit, offset } });
     } catch (error) {
-        console.error('Error fetching accounter orders:', error);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/orders/accounter');
     }
 });
 

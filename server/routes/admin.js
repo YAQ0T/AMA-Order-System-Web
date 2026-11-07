@@ -6,6 +6,7 @@ const { requireAdmin } = require('../middleware/adminAuth');
 const { logActivity } = require('../utils/activityLogger');
 const { escapeLike } = require('./order_helpers');
 const { Op } = require('sequelize');
+const { sendServerError } = require('../utils/serverError');
 
 const router = express.Router();
 
@@ -41,7 +42,7 @@ router.get('/users', async (req, res) => {
 
         res.json(users);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/admin/users');
     }
 });
 
@@ -62,7 +63,7 @@ router.get('/users/pending', async (req, res) => {
 
         res.json(users);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/admin/users/pending');
     }
 });
 
@@ -103,7 +104,7 @@ router.put('/users/:id/approve', async (req, res) => {
             }
         });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'PUT /api/admin/users/:id/approve');
     }
 });
 
@@ -143,7 +144,7 @@ router.put('/users/:id/deactivate', async (req, res) => {
         await logActivity(req.user.id, 'user_deactivated', 'user', user.id, { username: user.username, role: user.role }, req.ip);
         res.json({ message: 'User deactivated', activeAssignments });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'PUT /api/admin/users/:id/deactivate');
     }
 });
 
@@ -166,7 +167,7 @@ router.put('/users/:id/password', async (req, res) => {
         await logActivity(req.user.id, 'user_password_reset', 'user', user.id, { username: user.username }, req.ip);
         res.json({ message: 'Password changed' });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'PUT /api/admin/users/:id/password');
     }
 });
 
@@ -221,8 +222,7 @@ router.delete('/users/:id', async (req, res) => {
 
         res.json({ message: 'User deleted successfully' });
     } catch (error) {
-        console.error('Delete user error:', error);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'DELETE /api/admin/users/:id');
     }
 });
 
@@ -261,7 +261,7 @@ router.get('/orders', async (req, res) => {
 
         res.json(orders);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/admin/orders');
     }
 });
 
@@ -296,7 +296,7 @@ router.get('/orders/:id', async (req, res) => {
 
         res.json(order);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/admin/orders/:id');
     }
 });
 
@@ -313,7 +313,7 @@ router.get('/orders/:id/logs', async (req, res) => {
 
         res.json(logs);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/admin/orders/:id/logs');
     }
 });
 
@@ -358,7 +358,7 @@ router.delete('/orders/:id', async (req, res) => {
 
         res.json({ message: 'Order deleted successfully' });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'DELETE /api/admin/orders/:id');
     }
 });
 
@@ -386,12 +386,12 @@ router.get('/logs', async (req, res) => {
                 attributes: ['id', 'username', 'role']
             }],
             order: [['createdAt', 'DESC'], ['id', 'DESC']],
-            limit: parseInt(limit)
+            limit: Math.max(1, Math.min(parseInt(limit, 10) || 100, 1000))
         });
 
         res.json(logs);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/admin/logs');
     }
 });
 
@@ -408,7 +408,7 @@ router.get('/logs/all', async (req, res) => {
             }),
             OrderLog.findAll({
                 include: [
-                    { model: User, as: 'Editor', attributes: ['id', 'username'] },
+                    { model: User, as: 'Editor', attributes: ['id', 'username', 'role'] },
                     { model: Order, attributes: ['id', 'title', 'status', 'city'] }
                 ],
                 order: [['createdAt', 'DESC'], ['id', 'DESC']],
@@ -435,8 +435,11 @@ router.get('/logs/all', async (req, res) => {
 
         const combined = [
             ...activity.map(log => ({
+                // id and User as on every other log entry the app receives; user kept for older clients.
+                id: log.id,
                 type: 'activity',
                 createdAt: log.createdAt,
+                User: log.User,
                 user: log.User,
                 action: log.action,
                 targetType: log.targetType,
@@ -445,8 +448,10 @@ router.get('/logs/all', async (req, res) => {
                 description: formatActivityDescription(log)
             })),
             ...orderChanges.map(log => ({
+                id: log.id,
                 type: 'order_change',
                 createdAt: log.createdAt,
+                User: log.Editor,
                 user: log.Editor,
                 action: 'order_change',
                 targetType: 'order',
@@ -464,7 +469,7 @@ router.get('/logs/all', async (req, res) => {
 
         res.json(combined);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/admin/logs/all');
     }
 });
 
@@ -481,7 +486,9 @@ router.get('/stats', async (req, res) => {
             recentActivity
         ] = await Promise.all([
             User.count({ where: { role: { [Op.ne]: 'admin' } } }),
-            User.count({ where: { isApproved: false, role: { [Op.ne]: 'admin' } } }),
+            // Same rule as /users/pending: a deactivated account (approvedAt
+            // set) is not waiting for approval.
+            User.count({ where: { isApproved: false, approvedAt: null, role: { [Op.ne]: 'admin' } } }),
             Order.count(),
             Order.count({ where: { status: { [Op.in]: ['pending', 'in-progress'] } } }),
             ActivityLog.findAll({
@@ -490,7 +497,10 @@ router.get('/stats', async (req, res) => {
                 include: [{
                     model: User,
                     as: 'User',
-                    attributes: ['username']
+                    // The same fields as every other user the app receives
+                    // (with only the name, the app's check refused the whole
+                    // overview and showed zeros).
+                    attributes: ['id', 'username', 'role']
                 }]
             })
         ]);
@@ -516,7 +526,7 @@ router.get('/stats', async (req, res) => {
             recentActivity
         });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/admin/stats');
     }
 });
 

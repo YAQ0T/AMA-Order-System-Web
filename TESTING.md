@@ -3,7 +3,7 @@
 ## Automated
 
 ```bash
-cd client && npm test      # 57 unit tests
+cd client && npm test      # 64 unit tests
 cd client && npm run lint
 ```
 
@@ -78,8 +78,8 @@ Against the mock, driving the real UI:
 
 ## Verified against the real server and MySQL 26.7
 
-Run with `npm run test:integration` in `server/` — **checks across six suites**
-(api 66, concurrency 34, telegram 45, open-orders 77, backup 47, security 77) - **346 in all**.
+Run with `npm run test:integration` in `server/` — **checks across seven suites**
+(api 66, concurrency 34, telegram 45, open-orders 77, backup 47, security 113, order-marks 42) - **424 in all**.
 It creates a throwaway database, runs everything against the real routes and
 real MySQL, and drops it afterwards — your own database is never touched. Test
 servers also write their backups and order logs to a throwaway folder, and
@@ -133,7 +133,20 @@ never take automatic backups.
 | Login throttling | 8 wrong passwords lock that name for 15 minutes; others can still log in |
 | **Outside access** | Local, this-computer and VPN addresses let in; public addresses (incl. the old system's 213.6.226.163) refused with 403; X-Forwarded-For can neither bypass nor trip the guard; `LAN_ONLY=off` switches it off |
 | Behind a tunnel | Each outside visitor is throttled separately (8 failures lock that visitor, not the real user elsewhere); outside sign-ups capped at 5 an hour per address, none at the server itself; foreign websites get no CORS permission |
+| **Online / urgent marks** | A maker's order marked online (and the mark editable, logged in the history); a maker cannot make an order urgent (ignored on create, 403 on edit), a taker cannot touch the marks; every admin order is urgent; the admin can change either mark |
+| Urgent first | The admin's urgent order heads the taker's list over newer orders, and heads the open list |
+| Marks on Telegram | Urgent messages start with 🔴 and say «طلب ضروري»; online ones say «طلب أونلاين» |
+| **Makers see only their own** | Another maker sees none of them (maker list, general list, title suggestions) and gets 403 editing, changing status, ticking or deleting; the admin sees all and can delete any (this used to fail) |
+| **Online link script** | `scripts/tunnel.js`: token found in a pasted command or alone; status and test on a computer without cloudflared; test against the live domain reports nameservers, addresses, Cloudflare error 530 (no tunnel connected) and the missing http-to-https redirect; the Windows administrator commands checked with PowerShell's parser |
 | **Launcher (Windows)** | First start against a database that does not exist yet: creates it and starts. Start with nothing running (installs/builds as needed, waits for the database, prints the phone address without the VirtualBox adapter); start when already running; start with MySQL unreachable (clear message, nothing left running); stop; restore cancelled (nothing changed) |
+| **Error answers** | A database fault (a table hidden for a moment) answers `{"error":"Server error"}` with no SQL, table or database name - the old code sent `Table 'ama_order_system_test.notifications' doesn't exist`; a broken JSON body or a bad `%` escape gets a short JSON 400, not Express's HTML page with the stack trace; an unknown `/api` address a JSON 404; a body over 100 KB a 413. With the fixes turned off, 16 checks fail |
+| Browser headers | Content-Security-Policy (own scripts only, no unsafe-inline for scripts, this server only, no framing), Permissions-Policy, HSTS only through the tunnel - a LAN device claiming "https" in a header gets none |
+| Malformed input | An item that is null, text or has an object for a name, a quantity of `true` or `[2]`, an unknown item status, a quantity rounding to 0, items that are not a list, a taker id of `true`: 400 with a clear message each (they were 500s); repeated or bracketed query keys and negative paging: answered normally |
+| Push subscriptions | Addresses on this computer, the LAN, plain http, a look-alike host or not an address at all are refused; one without keys is a 400 (was a 500); a real push service is accepted |
+| **Description, taker limits** | No description is stored as none (not "Order with 1 items"); an emptied box clears it; an edit that leaves it out keeps it; the assigned taker gets 403 changing the customer, description or city but can still add an item, and the maker's price survives |
+| Admin overview and logs | Recent activity carries each person's id (without it the app showed zeros); every entry of the full log has an id and a User (the app showed nothing); a deactivated account is not "waiting for approval" |
+| **Browser pass, production build** | On a throwaway database, with the new Content-Security-Policy: login; a maker creates an online order (open to any taker by default) and cannot see the other maker's order; print (styles and the Arabic font load, zero policy violations); a taker at phone width sees the admin's urgent order first, in red, and a 5-word item name on one line, takes the online order and ticks an item; the admin overview shows the real numbers; the full log lists order changes in Arabic; a maker clears a description in the edit window. No errors in the server log |
+| **Scripts** | `start-mock.cmd` brings up the mock and the client (login works through the proxy); `stop-mock.cmd` stops both, closes the windows, and leaves the process in `.ama_runtime/server.pid` alone; `launch.js` usage / stop / autostart / restore with no answer (nothing changed); `tunnel.js` status / test / menu, and the Cloudflare double-click file; `db:create` (twice - the second leaves it alone), `db:check`, `db:backup` and `npm run dev` (Telegram off) on a throwaway database; every `.sh` and `.command` file passes `bash -n` |
 
 ---
 

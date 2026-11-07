@@ -78,6 +78,9 @@ export const orderSchema = z.object({
   city: z.string().nullable().default(null),
   makerId: z.coerce.number().nullable().optional(),
   accounterId: z.coerce.number().nullable().optional(),
+  // MySQL BOOLEAN is TINYINT(1): accept 1/0 as well as true/false.
+  isOnline: z.preprocess((v) => v === true || v === 1 || v === '1', z.boolean()).default(false),
+  isUrgent: z.preprocess((v) => v === true || v === 1 || v === '1', z.boolean()).default(false),
   createdAt: z.string().nullable().optional(),
   updatedAt: z.string().nullable().optional(),
   Maker: userSchema.nullable().optional(),
@@ -114,16 +117,49 @@ export const notificationSchema = z.object({
   createdAt: z.string().nullable().optional(),
 });
 
-export const activityLogSchema = z.object({
-  id: z.coerce.number(),
-  action: z.string().default(''),
-  targetType: z.string().nullable().default(null),
-  targetId: z.coerce.number().nullable().optional(),
-  details: z.unknown().nullable().optional(),
-  ipAddress: z.string().nullable().optional(),
-  createdAt: z.string().nullable().optional(),
-  User: userSchema.nullable().optional(),
-});
+// The person on a log entry. Lenient on purpose - only the name is shown, and
+// the stats used to send nothing else (the strict user check then failed).
+const logUserSchema = z
+  .object({
+    id: z.coerce.number().optional(),
+    username: z.string().default(''),
+    role: z.string().optional(),
+  })
+  .nullable()
+  .optional();
+
+export const activityLogSchema = z
+  .object({
+    id: z.coerce.number().optional(),
+    // /api/admin/logs/all mixes 'activity' entries with 'order_change' ones.
+    type: z.string().optional(),
+    action: z.string().default(''),
+    targetType: z.string().nullable().default(null),
+    targetId: z.coerce.number().nullable().optional(),
+    details: z.unknown().nullable().optional(),
+    ipAddress: z.string().nullable().optional(),
+    createdAt: z.string().nullable().optional(),
+    User: logUserSchema,
+    user: logUserSchema, // older servers named it in lower case on /logs/all
+  })
+  .transform(({ user, ...log }) => ({ ...log, User: log.User ?? user ?? null }));
+
+/**
+ * A list of log entries, each checked on its own: an entry the app cannot
+ * read is left out (and logged), instead of failing the whole list. One bad
+ * entry used to empty the log page and zero every count on the admin overview.
+ */
+export const activityListSchema = z
+  .array(z.unknown())
+  .default([])
+  .transform((entries) =>
+    entries.flatMap((entry) => {
+      const result = activityLogSchema.safeParse(entry);
+      if (result.success) return [result.data];
+      console.error('[api] log entry skipped:', result.error.issues, entry);
+      return [];
+    })
+  );
 
 export const statsSchema = z.object({
   totalUsers: z.coerce.number().default(0),
@@ -131,7 +167,7 @@ export const statsSchema = z.object({
   totalOrders: z.coerce.number().default(0),
   activeOrders: z.coerce.number().default(0),
   usersByRole: z.record(z.string(), z.coerce.number()).default({}),
-  recentActivity: z.array(activityLogSchema).default([]),
+  recentActivity: activityListSchema,
 });
 
 export const authResponseSchema = z.object({

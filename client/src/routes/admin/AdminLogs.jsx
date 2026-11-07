@@ -44,8 +44,8 @@ export default function AdminLogs() {
               setLimit(STEP);
             }}
           />
-          {/* /logs/all returns every action type; /logs is the filtered feed. */}
-          {T.logs}
+          {/* Ticked: /logs/all, which adds every change made to an order. */}
+          {T.includeOrderChanges}
         </label>
       </header>
 
@@ -54,8 +54,8 @@ export default function AdminLogs() {
       ) : (
         <>
           <ul>
-            {logs.map((log) => (
-              <ActivityItem key={`${log.id}-${log.action}`} log={log} />
+            {logs.map((log, i) => (
+              <ActivityItem key={`${log.type ?? ''}-${log.id}-${log.action}-${i}`} log={log} />
             ))}
           </ul>
 

@@ -7,6 +7,7 @@ import {
   lineTotal,
   orderTotal,
   orderTitle,
+  orderDescription,
 } from './format';
 
 describe('normalizeDigits', () => {
@@ -108,5 +109,23 @@ describe('orderTitle', () => {
   it('falls back to the order number', () => {
     expect(orderTitle({ id: 5, title: '' })).toBe('طلب #5');
     expect(orderTitle({ id: 5, title: null })).toBe('طلب #5');
+  });
+});
+
+describe('orderDescription', () => {
+  it('returns the description as typed', () => {
+    expect(orderDescription({ description: '  توصيل بعد الظهر ' })).toBe('توصيل بعد الظهر');
+  });
+
+  it('treats the old English filler (and nothing) as no description', () => {
+    expect(orderDescription({ description: 'Order with 3 items' })).toBe('');
+    expect(orderDescription({ description: 'Order with 1 items' })).toBe('');
+    expect(orderDescription({ description: 'New Order' })).toBe('');
+    expect(orderDescription({ description: null })).toBe('');
+    expect(orderDescription(undefined)).toBe('');
+  });
+
+  it('keeps real text that merely starts the same way', () => {
+    expect(orderDescription({ description: 'Order with 3 items - deliver Sunday' })).toBe('Order with 3 items - deliver Sunday');
   });
 });

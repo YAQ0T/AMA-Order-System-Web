@@ -7,6 +7,13 @@ import { statusLabel } from './labels';
  * Anything not listed is shown as the server sent it.
  */
 const EXACT = {
+  // Any request. The server never sends its internal error details
+  // (server/utils/serverError.js), so these are all there is to show.
+  'Server error': 'حدث خطأ في الخادم، حاول مرة أخرى. إذا تكرر أخبر المدير.',
+  'Invalid request': 'الطلب المرسل غير صالح. حدّث الصفحة وحاول مرة أخرى.',
+  'Request is too large': 'البيانات المرسلة كبيرة جداً',
+  'Not found': 'غير موجود',
+
   // Login and accounts
   'Invalid credentials': 'اسم المستخدم أو كلمة المرور غير صحيحة',
   'Account pending admin approval': 'الحساب بانتظار موافقة المدير',
@@ -21,6 +28,7 @@ const EXACT = {
   'Password must be at least 6 characters': 'كلمة المرور يجب ألا تقل عن 6 أحرف',
   'Password is too long': 'كلمة المرور طويلة جداً',
   'Invalid role': 'الدور غير صالح',
+  'Invalid sign-up details': 'بيانات التسجيل غير صالحة',
   'Too many sign-ups from this address. Try again later.': 'محاولات تسجيل كثيرة من نفس العنوان. حاول لاحقاً.',
   'Current password is incorrect': 'كلمة المرور الحالية غير صحيحة',
   'The new password must be different from the current one': 'كلمة المرور الجديدة يجب أن تختلف عن الحالية',
@@ -56,9 +64,13 @@ const EXACT = {
   'Not authorized to edit this order': 'لا تملك صلاحية تعديل هذا الطلب',
   'Not authorized to process this order': 'لا تملك صلاحية معالجة هذا الطلب',
   'Only makers or admins can assign takers': 'إسناد المجهّزين من صلاحية منشئ الطلبات أو المدير',
+  'Only makers or admins can change the order details': 'اسم الزبون والوصف والمدينة من صلاحية منشئ الطلب أو المدير',
+  'Only makers or admins can change the online mark': 'علامة «أونلاين» من صلاحية منشئ الطلب أو المدير',
+  'Only an admin can change the urgent mark': 'علامة «ضروري» من صلاحية المدير فقط',
   'Only makers or admins can assign an accounter': 'اختيار المحاسب من صلاحية منشئ الطلبات أو المدير',
   'Only makers or admins can create orders': 'إنشاء الطلبات من صلاحية منشئ الطلبات أو المدير',
-  'Only makers can delete orders': 'حذف الطلبات من صلاحية منشئ الطلبات',
+  'Only makers or admins can delete orders': 'حذف الطلبات من صلاحية منشئ الطلب أو المدير',
+  'Items must be a list': 'أصناف الطلب غير صالحة. حدّث الصفحة وحاول مرة أخرى.',
   'You can only delete your own orders': 'يمكنك حذف طلباتك فقط',
   'Only takers can take open orders': 'أخذ الطلبات المفتوحة للمجهّزين فقط',
   'Accounter can only mark orders as entered to ERP': 'المحاسب يستطيع فقط تعليم الطلب كمُدخل إلى ERP',
@@ -79,6 +91,7 @@ const PATTERNS = [
   [/^Invalid quantity for "(.+)"$/, (m) => `الكمية غير صالحة للصنف «${m[1]}»`],
   [/^Invalid price for "(.+)"$/, (m) => `السعر غير صالح للصنف «${m[1]}»`],
   [/^Item (\d+) is missing a name$/, (m) => `الصنف رقم ${m[1]} بلا اسم`],
+  [/^Item (\d+) is invalid$/, (m) => `الصنف رقم ${m[1]} غير صالح`],
   [/^Item name is too long/, () => 'اسم الصنف طويل جداً (الحد الأقصى 255 حرفاً)'],
   [/^Customer name is too long/, () => 'اسم الزبون طويل جداً (الحد الأقصى 255 حرفاً)'],
   [/^Description is too long/, () => 'الوصف طويل جداً (الحد الأقصى 5000 حرف)'],

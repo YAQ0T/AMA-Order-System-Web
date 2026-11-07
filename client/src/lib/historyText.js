@@ -14,13 +14,17 @@ const HISTORY = [
   [/^Status: (\S+) -> (\S+)$/, (m) => `الحالة: من «${statusLabel(m[1])}» إلى «${statusLabel(m[2])}»`],
   [/^Title: (.*) -> (.*)$/s, (m) => `اسم الزبون: من «${orNone(m[1])}» إلى «${m[2]}»`],
   [/^City: (.*) -> (.*)$/, (m) => `المدينة: من «${orNone(m[1])}» إلى «${m[2]}»`],
-  [/^Desc: (.*) -> (.*)$/s, (m) => `الوصف أصبح: «${m[2]}»`],
+  [/^Desc: (.*) -> (.*)$/s, (m) => (m[2] === 'None' ? 'حُذف الوصف' : `الوصف أصبح: «${m[2]}»`)],
   [/^Updated (.+): Qty (\S+) -> (\S+)$/, (m) => `${m[1]}: الكمية من ${m[2]} إلى ${m[3]}`],
   [/^Added: (.+) \(Qty: (\S+)\)$/, (m) => `إضافة صنف: ${m[1]} (الكمية ${m[2]})`],
   [/^Removed: (.+)$/, (m) => `حذف صنف: ${m[1]}`],
   [/^Updated Assigned Takers$/, () => 'تغيير المجهّزين'],
   [/^Opened to any taker$/, () => 'أصبح مفتوحاً لأي مجهّز'],
   [/^Taken by (.+)$/, (m) => `أخذه ${m[1]} من الطلبات المفتوحة`],
+  [/^Marked online$/, () => 'أصبح طلباً أونلاين'],
+  [/^Online mark removed$/, () => 'أُزيلت علامة «أونلاين»'],
+  [/^Marked urgent$/, () => 'أصبح طلباً ضرورياً'],
+  [/^Urgent mark removed$/, () => 'أُزيلت علامة «ضروري»'],
   // Item status changes: "<item name>: collected". Last, because it is the loosest.
   [/^(.+): (collected|unavailable|none)$/, (m) => `${m[1]}: ${ITEM_STATUS[m[2]]}`],
 ];

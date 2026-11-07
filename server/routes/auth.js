@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const { User } = require('../db');
 const { authenticateToken, signToken, forgetUser } = require('../middleware/auth');
 const { logActivity } = require('../utils/activityLogger');
+const { sendServerError } = require('../utils/serverError');
 
 const router = express.Router();
 
@@ -117,7 +118,10 @@ router.post('/register', async (req, res) => {
         if (error.name === 'SequelizeUniqueConstraintError') {
             return res.status(409).json({ error: 'Username already taken' });
         }
-        res.status(400).json({ error: error.message });
+        if (error.name === 'SequelizeValidationError') {
+            return res.status(400).json({ error: 'Invalid sign-up details' });
+        }
+        sendServerError(res, error, 'POST /api/auth/register');
     }
 });
 
@@ -170,7 +174,7 @@ router.post('/login', async (req, res) => {
             mustChangePassword: user.role === 'admin' && password === DEFAULT_ADMIN_PASSWORD
         });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'POST /api/auth/login');
     }
 });
 
@@ -187,7 +191,7 @@ router.get('/me', authenticateToken, async (req, res) => {
 
         res.json({ user });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/auth/me');
     }
 });
 
@@ -219,7 +223,7 @@ router.put('/password', authenticateToken, async (req, res) => {
 
         res.json({ token: signToken(user), user: publicUser(user) });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'PUT /api/auth/password');
     }
 });
 
@@ -243,7 +247,7 @@ router.put('/theme', authenticateToken, async (req, res) => {
 
         res.json({ user: publicUser(user) });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'PUT /api/auth/theme');
     }
 });
 
@@ -258,7 +262,7 @@ router.get('/takers', authenticateToken, async (req, res) => {
         });
         res.json(takers);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/auth/takers');
     }
 });
 
@@ -271,7 +275,7 @@ router.get('/accounters', authenticateToken, async (req, res) => {
         });
         res.json(accounters);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/auth/accounters');
     }
 });
 

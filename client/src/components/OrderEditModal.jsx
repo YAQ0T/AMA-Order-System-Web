@@ -1,10 +1,11 @@
 import { useState } from 'react';
 
 import { T, CITIES } from '../lib/labels';
-import { parseNumber, formatQuantity } from '../lib/format';
+import { parseNumber, formatQuantity, orderDescription } from '../lib/format';
 import { useTakers, useAccounters } from '../hooks/useUsers';
 import { useUpdateOrder } from '../hooks/useOrders';
 import { isOpenOrder } from '../api/orders';
+import { useAuth } from '../store/auth';
 import { useToast } from './Toast';
 import { Modal, Spinner } from './ui';
 import ItemNameInput from './ItemNameInput';
@@ -40,11 +41,17 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
   const { data: accounters = [] } = useAccounters(open && canAssign);
 
   const [title, setTitle] = useState(order?.title || '');
-  const [description, setDescription] = useState(order?.description || '');
+  // What the box starts with: the old English filler shows as empty.
+  const initialDescription = orderDescription(order);
+  const [description, setDescription] = useState(initialDescription);
   const [city, setCity] = useState(order?.city || '');
   const [rows, setRows] = useState(() => (order?.Items || []).map(toRow));
   const [takerIds, setTakerIds] = useState(() => (order?.AssignedTakers || []).map((t) => t.id));
   const [openToAll, setOpenToAll] = useState(() => isOpenOrder(order));
+  const [isOnline, setIsOnline] = useState(Boolean(order?.isOnline));
+  const [isUrgent, setIsUrgent] = useState(Boolean(order?.isUrgent));
+  // "Online" is the maker's mark (canAssign = maker or admin); "urgent" is the admin's.
+  const isAdmin = useAuth((st) => st.user?.role === 'admin');
   const [accounterId, setAccounterId] = useState(
     order?.accounterId ? String(order.accounterId) : order?.Accounter?.id ? String(order.Accounter.id) : ''
   );
@@ -111,7 +118,9 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
 
     const payload = {
       title: title.trim() || null,
-      description: description.trim() || null,
+      // Sent only when edited: an emptied box clears the description, an
+      // untouched one leaves it (and the order history) alone.
+      ...(description.trim() !== initialDescription ? { description: description.trim() || null } : {}),
       city: city || null,
       items: cleaned,
     };
@@ -128,6 +137,8 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
         payload.assignedTakerIds = takerIds;
       }
       payload.accounterId = accounterId ? Number(accounterId) : null;
+      payload.isOnline = isOnline;
+      if (isAdmin) payload.isUrgent = isUrgent;
     }
 
     try {
@@ -182,6 +193,30 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
             value={description}
             onChange={(e) => setDescription(e.target.value)}
           />
+          {canAssign && (
+            <div className="mt-2 flex flex-wrap gap-4">
+              <label className="flex cursor-pointer items-center gap-2 text-sm font-bold text-sky-800 dark:text-sky-200">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-sky-600"
+                  checked={isOnline}
+                  onChange={(e) => setIsOnline(e.target.checked)}
+                />
+                {T.onlineOrder}
+              </label>
+              {isAdmin && (
+                <label className="flex cursor-pointer items-center gap-2 text-sm font-bold text-red-700 dark:text-red-300">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-red-600"
+                    checked={isUrgent}
+                    onChange={(e) => setIsUrgent(e.target.checked)}
+                  />
+                  {T.urgentOrderLong}
+                </label>
+              )}
+            </div>
+          )}
         </div>
 
         <fieldset>

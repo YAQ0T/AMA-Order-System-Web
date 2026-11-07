@@ -7,6 +7,7 @@ const { logActivity } = require('../utils/activityLogger');
 const { logOrderEvent } = require('../utils/orderRequestLogger');
 const { Op } = require('sequelize');
 const { sanitizeItems, buildOrderIncludes, fetchOrdersForRole, isOpenOrder, assertTakerIds, escapeLike, orderFieldsProblem } = require('./order_helpers');
+const { sendServerError, isBadInput } = require('../utils/serverError');
 
 const router = express.Router();
 
@@ -153,11 +154,6 @@ router.post('/', authenticateToken, async (req, res) => {
 
         const sanitizedItems = sanitizeItems(items || []);
 
-        let defaultDesc = 'New Order';
-        if (sanitizedItems && sanitizedItems.length > 0) {
-            defaultDesc = 'Order with ' + sanitizedItems.length + ' items';
-        }
-
         const orderStatus = status === 'archived' ? 'archived' : 'pending';
         const normalizedAccounterId = accounterId === '' ? null : accounterId;
         // An open order goes to no one in particular: the first taker to take
@@ -181,7 +177,9 @@ router.post('/', authenticateToken, async (req, res) => {
                 try {
                     assignedTakerIds = await assertTakerIds(assignedTakerIds);
                 } catch (err) {
-                    return res.status(err.status || 400).json({ error: err.message });
+                    // A database fault is not the sender's mistake: let the outer catch answer.
+                    if (!isBadInput(err)) throw err;
+                    return res.status(400).json({ error: err.message });
                 }
             }
         }
@@ -197,11 +195,16 @@ router.post('/', authenticateToken, async (req, res) => {
 
         const order = await Order.create({
             title,
-            description: description || defaultDesc,
+            // No description is stored as none. It used to become an English
+            // "Order with 3 items", which every screen and Telegram message showed.
+            description: (typeof description === 'string' && description.trim()) || null,
             makerId: req.user.id,
             status: orderStatus,
             city,
-            accounterId: normalizedAccounterId
+            accounterId: normalizedAccounterId,
+            isOnline: req.body.isOnline === true,
+            // Every order an admin creates is urgent; nobody else can ask for it.
+            isUrgent: req.user.role === 'admin'
         }, { transaction });
 
         // Only assign takers if NOT archived
@@ -268,6 +271,8 @@ router.post('/', authenticateToken, async (req, res) => {
         await logActivity(req.user.id, 'order_created', 'order', order.id, {
             status: orderStatus,
             openToAll: isOpen,
+            isOnline: order.isOnline,
+            isUrgent: order.isUrgent,
             city,
             itemCount: sanitizedItems?.length || 0,
             assignedTakers: assignedTakerIds || [],
@@ -293,7 +298,6 @@ router.post('/', authenticateToken, async (req, res) => {
                 console.error('Rollback failed after create error:', rollbackErr);
             }
         }
-        console.error('Error creating order:', error);
         await logOrderEvent('ORDER_CREATE_ERROR', {
             actor: actorInfo,
             durationMs: Date.now() - createStartAt,
@@ -304,16 +308,12 @@ router.post('/', authenticateToken, async (req, res) => {
             }
         });
         await logActivity(req.user?.id, 'order_error', 'order', null, { message: error.message, phase: 'create' }, req.ip);
-        const isValidationError = [
-            'Order must have',
-            'Invalid quantity',
-            'Invalid price',
-            'Duplicate item',
-            'missing a name',
-            'too long'
-        ].some(marker => (error.message || '').includes(marker)) || error.name === 'SequelizeValidationError';
 
-        res.status(isValidationError ? 400 : 500).json({ error: error.message });
+        // Bad input (an item without a name, a duplicate, a price that is not
+        // a number) is the sender's to fix: say what is wrong. Anything else
+        // is a fault here, and its details stay in the log.
+        if (isBadInput(error)) return res.status(400).json({ error: error.message });
+        sendServerError(res, error, 'POST /api/orders');
     }
 });
 
@@ -330,8 +330,7 @@ router.get('/', authenticateToken, async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('Error fetching orders:', error);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/orders');
     }
 });
 
@@ -495,6 +494,20 @@ router.put('/:id', authenticateToken, async (req, res) => {
             assignedTakerIds = undefined; // unchanged - nothing to do
         }
 
+        // The order's marks: "online" is the maker's to set, "urgent" the admin's.
+        if (req.body.isOnline !== undefined && !isMaker && !isAdmin) {
+            return res.status(403).json({ error: 'Only makers or admins can change the online mark' });
+        }
+        if (req.body.isUrgent !== undefined && !isAdmin) {
+            return res.status(403).json({ error: 'Only an admin can change the urgent mark' });
+        }
+        // A taker works on the items (adds one, changes a quantity, ticks them
+        // off) and moves the status on. The customer, description and city are
+        // the maker's; the app never offers a taker to change them.
+        if (!isMaker && !isAdmin && (title !== undefined || description !== undefined || req.body.city !== undefined)) {
+            return res.status(403).json({ error: 'Only makers or admins can change the order details' });
+        }
+
         const sentTakers = Array.isArray(assignedTakerIds) && assignedTakerIds.length > 0;
         if (wantsOpen && sentTakers) {
             return res.status(400).json({ error: 'An open order cannot also be assigned to takers' });
@@ -503,7 +516,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
             try {
                 assignedTakerIds = await assertTakerIds(assignedTakerIds);
             } catch (err) {
-                return res.status(err.status || 400).json({ error: err.message });
+                // A database fault is not the sender's mistake: let the outer catch answer.
+                if (!isBadInput(err)) throw err;
+                return res.status(400).json({ error: err.message });
             }
         }
         // openToAll means "nobody in particular": it clears the takers.
@@ -620,15 +635,18 @@ router.put('/:id', authenticateToken, async (req, res) => {
                 changeSummary.push('accounter');
             }
 
-            // Log Description Change
-            if (description && description !== order.description) {
+            // Log Description Change. An emptied box (null or '') clears the
+            // description - it used to be ignored, so the old text came back.
+            // Leaving the field out keeps it.
+            const newDescription = description === undefined ? undefined : ((description || '').trim() || null);
+            if (newDescription !== undefined && newDescription !== (order.description || null)) {
                 await OrderLog.create({
                     orderId: order.id,
                     previousDescription: order.description || 'None',
-                    newDescription: `Desc: ${order.description || 'None'} -> ${description}`,
+                    newDescription: `Desc: ${order.description || 'None'} -> ${newDescription || 'None'}`,
                     changedBy: req.user.id
                 }, { transaction });
-                order.description = description;
+                order.description = newDescription;
                 changeSummary.push('description');
             }
 
@@ -785,6 +803,23 @@ router.put('/:id', authenticateToken, async (req, res) => {
             }
         }
 
+        for (const [field, markedText, clearedText] of [
+            ['isOnline', 'Marked online', 'Online mark removed'],
+            ['isUrgent', 'Marked urgent', 'Urgent mark removed']
+        ]) {
+            const next = req.body[field];
+            if (typeof next === 'boolean' && next !== Boolean(order[field])) {
+                await OrderLog.create({
+                    orderId: order.id,
+                    previousDescription: String(Boolean(order[field])),
+                    newDescription: next ? markedText : clearedText,
+                    changedBy: req.user.id
+                }, { transaction });
+                order[field] = next;
+                changeSummary.push(field);
+            }
+        }
+
         if (releaseToOpen) {
             await OrderLog.create({
                 orderId: order.id,
@@ -862,7 +897,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
         // Did anything a taker can see change? Prices are not visible to them,
         // and a save that changed nothing should not ping anyone's phone.
         const changedForTakers = itemsChangedForTakers ||
-            changeSummary.some(c => c === 'title' || c === 'city' || c === 'description');
+            changeSummary.some(c => ['title', 'city', 'description', 'isOnline', 'isUrgent'].includes(c));
 
         // General Notification for Edits (Title/Description/Items)
         // If the maker (or an admin) edits, notify the takers who were already on the order
@@ -1004,7 +1039,6 @@ router.put('/:id', authenticateToken, async (req, res) => {
                 console.error('Rollback failed after update error:', rollbackErr);
             }
         }
-        console.error('Error updating order:', error);
         await logOrderEvent('ORDER_UPDATE_ERROR', {
             actor: actorInfo,
             durationMs: Date.now() - updateStartAt,
@@ -1016,16 +1050,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
             }
         });
         await logActivity(req.user?.id, 'order_error', 'order', req.params.id, { message: error.message, phase: 'update' }, req.ip);
-        const isValidationError = [
-            'Order must have',
-            'Invalid quantity',
-            'Invalid price',
-            'Duplicate item',
-            'missing a name',
-            'too long'
-        ].some(marker => (error.message || '').includes(marker)) || error.name === 'SequelizeValidationError';
 
-        res.status(isValidationError ? 400 : 500).json({ error: error.message });
+        if (isBadInput(error)) return res.status(400).json({ error: error.message });
+        sendServerError(res, error, 'PUT /api/orders/:id');
     }
 });
 
@@ -1052,8 +1079,7 @@ router.get('/suggestions', authenticateToken, async (req, res) => {
 
         res.json(suggestions.map(s => s.title));
     } catch (error) {
-        console.error('Error fetching title suggestions:', error);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'GET /api/orders/suggestions');
     }
 });
 
@@ -1066,8 +1092,11 @@ router.delete('/:id', authenticateToken, async (req, res) => {
             actor: actorInfo,
             orderId: Number(req.params.id)
         });
-        if (req.user.role !== 'maker') {
-            return res.status(403).json({ error: 'Only makers can delete orders' });
+        // A maker deletes their own orders; the admin any order. (The admin
+        // screen's delete button calls this route, which used to refuse admins.)
+        const isAdmin = req.user.role === 'admin';
+        if (req.user.role !== 'maker' && !isAdmin) {
+            return res.status(403).json({ error: 'Only makers or admins can delete orders' });
         }
 
         const order = await Order.findByPk(req.params.id, {
@@ -1078,7 +1107,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Order not found' });
         }
 
-        if (order.makerId !== req.user.id) {
+        if (!isAdmin && order.makerId !== req.user.id) {
             return res.status(403).json({ error: 'You can only delete your own orders' });
         }
 
@@ -1106,7 +1135,6 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 
         res.json({ message: 'Order deleted successfully' });
     } catch (error) {
-        console.error('Error deleting order:', error);
         await logOrderEvent('ORDER_DELETE_ERROR', {
             actor: actorInfo,
             durationMs: Date.now() - deleteStartAt,
@@ -1116,7 +1144,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
                 stack: error.stack
             }
         });
-        res.status(500).json({ error: error.message });
+        sendServerError(res, error, 'DELETE /api/orders/:id');
     }
 });
 

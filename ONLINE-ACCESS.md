@@ -12,12 +12,12 @@
 
 > السيرفر صار **يرفض أي اتصال مباشر من الإنترنت**، حتى لو في بورت مفتوح بالراوتر بالغلط (زي النظام القديم). الطريق الوحيد من برّا هو الرابط الآمن. (للتعطيل: `LAN_ONLY=off` في `server/.env` — لا يُنصح.)
 
-### وضع الدومين هلّق (فحصته)
+### وين وصلتوا (آخر فحص)
 
-- مُدار من **GoDaddy** (`ns33.domaincontrol.com` و `ns34.domaincontrol.com`).
-- `amaorders.work` و `www` بيأشروا على **`213.6.226.163`** — هاد عنوان **النظام القديم**.
-- **ما عليه إيميل** (ما في سجلات MX)، فنقله لـ Cloudflare ما بيخرّب اشي.
-- DNSSEC مش مفعّل، فما في اشي تطفيه قبل النقل.
+- ✅ الدومين صار على **Cloudflare** (`kolton.ns.cloudflare.com` و `maleah.ns.cloudflare.com`)، و `amaorders.work` و `www` بيأشروا على Cloudflare. يعني الخطوات **2 أ** و **2 ب** خلصت.
+- ❌ الرابط بيرجّع **خطأ 530** = ولا جهاز مربوط بالنفق هلّق. **الجاي:** على الجهاز اللي عليه النظام شغّل **Cloudflare AMA** ← `1` (الخطوة 2 ج تحت).
+- ⚠️ **Always Use HTTPS** لسا مش مفعّلة (الخطوة 2 ج، رقم 4).
+- قبل النقل كان: مُدار من GoDaddy، وبيأشر على عنوان النظام القديم `213.6.226.163`، وما عليه إيميل.
 
 ---
 
@@ -39,7 +39,7 @@
 2. **MySQL**: نزّل **MySQL Community Server** للماك من [dev.mysql.com](https://dev.mysql.com/downloads/mysql/) (اختار Apple silicon أو Intel حسب جهازك).
    - أثناء التركيب اختار **Use Strong Password Encryption**، وحط كلمة سر للمستخدم `root` واحفظها بمكان آمن.
    - بعد التركيب: System Settings ← MySQL ← تأكد إنه **Running**، وفعّل تشغيله مع تشغيل الجهاز.
-3. **فك ملف** `AMA-Order-System-Web-2026-10-18.zip` بمكان ثابت (مثلاً Documents). ما تنسخ ملف `server/.env` من الويندوز كما هو.
+3. **نزّل المشروع**: بالـTerminal `git clone https://github.com/YAQ0T/AMA-Order-System-Web.git` (بمكان ثابت مثل Documents)، أو فك ملف الـzip. ما تنسخ ملف `server/.env` من الويندوز كما هو. وللتحديثات بعدين: `git pull` داخل المجلد ثم Stop AMA وStart AMA.
 4. **وقّف النظام على الويندوز** (Stop AMA) — عشان ما يشتغلوا الاتنين على نفس بوت تيليغرام.
 5. دبل كليك على **Start AMA (Mac).command**:
    - إذا قال الماك إنه من مطوّر غير معروف: كبسة يمين ← Open.
@@ -67,20 +67,14 @@
 
 (أسماء الأزرار عند GoDaddy وCloudflare ممكن تختلف شوي مع الوقت، بس الخطوات نفسها.)
 
-### ج. عمل النفق على جهاز النظام
-1. بـ Cloudflare: **Networking ← Tunnels** (أو Zero Trust ← Networks ← Tunnels) ← **Create a tunnel** ← نوع **Cloudflared** ← سمّيه `ama-orders` ← اختار نظام الجهاز (**macOS** أو **Windows**). رح يطلعلك أمر فيه **توكن طويل** — هاد سرّي، ما تبعته لحدا (ولا إلي).
-2. **على الماك** افتح Terminal ونفّذ:
-   ```
-   brew install cloudflared
-   sudo cloudflared service install التوكن-هون
-   ```
-   (إذا ما عندك Homebrew: ركّبه من [brew.sh](https://brew.sh)، أو نزّل cloudflared للماك من صفحة التحميل الرسمية لـ Cloudflare.)
-
-   **أو على الويندوز**: نزّل cloudflared نسخة 64-bit من صفحة التحميل الرسمية، وافتح Command Prompt **كمسؤول (Run as administrator)** ونفّذ:
-   ```
-   cloudflared.exe service install التوكن-هون
-   ```
-   بالداشبورد لازم يصير النفق **Healthy / Connected**.
+### ج. ربط جهاز النظام بالنفق
+1. بـ Cloudflare: **Networking ← Tunnels** (أو Zero Trust ← Networks ← Tunnels) ← افتح النفق (أو **Create a tunnel** ← نوع **Cloudflared** ← سمّيه `ama-orders`) ← اختار نظام الجهاز (**macOS** أو **Windows**). رح يطلعلك **أمر تركيب فيه توكن طويل** — انسخه. هاد سرّي، ما تبعته لحدا (ولا إلي).
+2. على جهاز النظام: دبل كليك **Cloudflare AMA (Mac).command** أو **Cloudflare AMA (Windows).cmd** ← اكتب `1` ← **الصق الأمر كله** (أو التوكن لحاله) ← Enter.
+   - بيركّب cloudflared لحاله إذا مش موجود (ماك: Homebrew، ويندوز: winget — إذا سألك توافق على الشروط، جاوب بنفسك).
+   - **ويندوز** رح يطلب إذن (نعم/Yes). **الماك** رح يطلب كلمة سر الماك.
+   - بعدين بيسألك عن الرابط: اكتب `https://amaorders.work` ← بيحفظه بـ `server/.env` ← وبيسألك تعيد تشغيل النظام (اكتب `y`).
+   - بالآخر بيعمل **فحص كامل** ولازم يطلع: `Everything works`.
+   - بالداشبورد كمان لازم يصير النفق **Healthy / Connected**.
 3. **اربط الدومين بالنظام** — داخل النفق ← **Routes** / Public hostnames ← **Add** (Published application) — مرتين:
    | Subdomain | Domain | Service |
    |---|---|---|
@@ -88,14 +82,43 @@
    | `www` | `amaorders.work` | HTTP ← `localhost:6001` |
 4. بـ Cloudflare: **SSL/TLS ← Edge Certificates ← Always Use HTTPS** ← فعّلها (بتحوّل أي حدا بيكتب `http://` لـ `https://`).
 
-### د. ربط النظام بالرابط
-1. بملف `server/.env` على جهاز النظام حط:
-   ```
-   APP_URL=https://amaorders.work
-   ```
-   (هاد كمان بيخلي زر «فتح نظام الطلبات» برسائل تيليغرام يفتح الرابط الأونلاين.)
-2. **Stop AMA** ثم **Start AMA** — لازم يطلع سطر: `Online link working: https://amaorders.work`
-3. جرّب من تلفون على **الداتا** (مش الواي فاي): افتح `https://amaorders.work` ← لازم تطلع صفحة الدخول.
+### د. التأكد
+1. **Cloudflare AMA** ← `4` (Test) ← لازم كل الأسطر `OK`.
+2. جرّب من تلفون على **الداتا** (مش الواي فاي): افتح `https://amaorders.work` ← لازم تطلع صفحة الدخول.
+
+(إذا بتحب تعملها يدوياً بدل ملف Cloudflare AMA: `APP_URL=https://amaorders.work` بملف `server/.env`، والأوامر: ماك `brew install cloudflared` و `sudo cloudflared service install التوكن`؛ ويندوز من Command Prompt كمسؤول: `cloudflared.exe service install التوكن`.)
+
+## ملف Cloudflare AMA — التشغيل والإيقاف والفحص
+
+دبل كليك على **Cloudflare AMA (Mac).command** أو **Cloudflare AMA (Windows).cmd**. فوق بيعرض الحالة (cloudflared مركّب؟ النفق شغّال؟ شو الرابط؟)، وتحتها:
+
+| الرقم | شو بيعمل | متى تستعمله |
+|---|---|---|
+| `1` Connect | بيركّب cloudflared وبيربط الجهاز بالنفق بالتوكن، وبيحفظ الرابط | أول مرة على كل جهاز |
+| `2` Start | بيشغّل النفق | بعد ما وقّفته |
+| `3` Stop | بيوقّف النفق — الرابط الأونلاين بيوقف، وجوّا الشركة النظام بيضل شغّال | صيانة، أو قبل نقل النظام |
+| `4` Test | فحص كامل وبيحكيلك شو تصلّح | أي وقت حاسس في مشكلة |
+| `5` Log | آخر رسائل النفق | إذا الفحص ما وضّح المشكلة |
+| `6` Remove | بيشيل النفق من هالجهاز نهائياً | قبل نقل النظام لجهاز ثاني |
+
+(النفق بيشتغل لحاله مع تشغيل الجهاز، حتى لو وقّفته قبل الإطفاء — للإيقاف الدائم استعمل `6`.)
+
+**شو معنى أسطر الفحص (`4`):**
+
+| السطر | إذا طلع `XX` |
+|---|---|
+| cloudflared is installed | اختار `1` |
+| The tunnel is connected on this computer | اختار `1` والصق أمر التركيب |
+| The tunnel is running | اختار `2` |
+| The system is running on this computer | شغّل **Start AMA** |
+| APP_URL is https://… | اختار `1` (بيسألك عن الرابط)، أو حطه بـ `server/.env` |
+| amaorders.work is managed by … cloudflare | الـnameservers عند GoDaddy لازم يكونوا تبع Cloudflare |
+| amaorders.work has an address | ضيف الـRoute بالنفق (الخطوة 2 ج، رقم 3) |
+| … reaches the system on this computer | شوف الرقم بالسطر: **530** = ولا جهاز مربوط بالنفق؛ **502** = النفق مربوط بس النظام طافي على هاد الجهاز؛ **404** = في Route ناقص |
+| … answers from ANOTHER computer | النظام شغّال على جهازين! وقّف واحد (Stop AMA + `6`) |
+| http:// is sent on to https:// (`!`) | فعّل **Always Use HTTPS** بـ Cloudflare |
+
+السطر الأخير لازم يكون: `Everything works. Staff can open https://amaorders.work from anywhere.`
 
 ## الخطوة 3 (اختيارية): حماية إضافية بـ Cloudflare Access
 
@@ -120,12 +143,10 @@
 
 1. على الجهاز الحالي: خذ نسخة احتياطية (صفحة المدير ← «خذ نسخة احتياطية الآن»، أو بالـTerminal داخل `server`: `npm run db:backup`)، بعدين **Stop AMA**.
 2. انسخ أحدث ملف من مجلد `backups` لمجلد `backups` على الجهاز الجديد.
-3. **أوقف النفق** على الجهاز القديم:
-   - ماك: `sudo cloudflared service uninstall`
-   - ويندوز (Command Prompt كمسؤول): `cloudflared.exe service uninstall`
-4. على الجهاز الجديد: ركّب cloudflared بنفس التوكن (من الداشبورد: النفق ← Configure ← بيطلعلك أمر التركيب) — نفس أوامر الخطوة 2 ج.
-5. على الجهاز الجديد: **Restore AMA** ← اختار النسخة ← **Start AMA**.
-6. الرابط للتلفونات بيضل نفسه: `https://amaorders.work`
+3. **شيل النفق** عن الجهاز القديم: **Cloudflare AMA** ← `6`.
+4. على الجهاز الجديد: **Restore AMA** ← اختار النسخة ← **Start AMA**.
+5. على الجهاز الجديد: **Cloudflare AMA** ← `1` ← الصق أمر التركيب (من الداشبورد: النفق ← Configure، نفس التوكن).
+6. **Cloudflare AMA** ← `4`: لازم كله `OK`. الرابط للتلفونات بيضل نفسه: `https://amaorders.work`
 
 > أي طلب بينعمل على الجهاز القديم **بعد** النسخة ما بينتقل — عشان هيك: خذ النسخة ووقّف بنفس اللحظة.
 
@@ -146,4 +167,8 @@
 - **التسجيل الجديد** بيحتاج موافقة المدير، وما في حدا بيقدر يعمل حساب مدير.
 - **تخمين كلمات السر** محدود لكل زائر (8 محاولات غلط ← قفل 15 دقيقة)، والتسجيل محدود (5 بالساعة لكل عنوان).
 - **تعطيل حساب** أو **تغيير كلمة سر** بيطلّع الشخص من كل أجهزته خلال ثواني.
+- **كل واحد بيشوف شغله بس**: منشئ الطلبات بيشوف طلباته هو بس، والمجهّز بيشتغل على الأصناف والحالة بس (ما بيقدر يغيّر اسم الزبون أو الوصف أو المدينة)، والمدير بيشوف كل شي.
+- **الأخطاء ما بتكشف إشي**: لو صار خطأ بالسيرفر، المستخدم بيشوف «حدث خطأ في الخادم» بس، والتفاصيل (أسماء الجداول، مسارات الملفات) بتنكتب بسجل السيرفر على الجهاز بس.
+- **حماية بالمتصفح**: الصفحة ما بتشغّل إلا كود النظام نفسه، وما بتحكي إلا مع سيرفر النظام، وما في موقع ثاني بيقدر يعرضها جوّاه. وعلى الرابط الأونلاين المتصفح بيصرّ على https.
+- **أي طلب مكسور أو غريب** بينرفض برسالة واضحة، بدل ما يوقّع السيرفر.
 - المطلوب منكم: كلمات سر قوية، وغيّروا كلمة سر `admin` إذا لسا الافتراضية، وعطّلوا حساب أي حدا بيترك الشغل.

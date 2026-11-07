@@ -16,6 +16,12 @@ describe('translateServerError', () => {
     expect(translateServerError('Too many failed login attempts. Try again in 15 minutes.')).toContain('15');
   });
 
+  it('translates the fixed answers the server gives instead of internal details', () => {
+    expect(translateServerError('Server error')).toContain('خطأ في الخادم');
+    expect(translateServerError('Invalid request')).toContain('غير صالح');
+    expect(translateServerError('Item 3 is invalid')).toBe('الصنف رقم 3 غير صالح');
+  });
+
   it('leaves unknown text (and non-strings) alone', () => {
     expect(translateServerError('Something new')).toBe('Something new');
     expect(translateServerError(undefined)).toBe(undefined);
@@ -31,6 +37,10 @@ describe('historyText', () => {
     expect(historyText('طحينة: collected')).toBe('طحينة: تم التجهيز');
     expect(historyText('زيت: none')).toBe('زيت: بدون حالة');
     expect(historyText('Taken by taker3')).toBe('أخذه taker3 من الطلبات المفتوحة');
+    expect(historyText('Marked urgent')).toBe('أصبح طلباً ضرورياً');
+    expect(historyText('Online mark removed')).toBe('أُزيلت علامة «أونلاين»');
+    expect(historyText('Desc: توصيل -> None')).toBe('حُذف الوصف');
+    expect(historyText('Desc: None -> توصيل صباحاً')).toBe('الوصف أصبح: «توصيل صباحاً»');
   });
 
   it('keeps a customer name that itself contains a colon', () => {

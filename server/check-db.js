@@ -180,7 +180,7 @@ async function main() {
 
   console.log('');
   if (problems === 0) {
-    console.log('  All good. Start the server with:  npm run dev\n');
+    console.log('  All good. Start the system with Start AMA (developers: npm run dev).\n');
     process.exit(0);
   } else {
     console.log(`  ${problems} problem(s) found - see above.\n`);

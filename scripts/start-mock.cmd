@@ -1,6 +1,9 @@
 @echo off
-REM Front-end only: fake API with seed data, no PostgreSQL needed.
+REM For working on screens: a fake API with sample data (tools\mock-api.js) and
+REM the Vite dev server, each in its own window. No database, no Telegram -
+REM nothing real is touched.
 REM Log in as admin / maker1 / taker1 / taker2 / acc1 with any password.
+REM Stop both with scripts\stop-mock.cmd (or close the two windows).
 
 cd /d "%~dp0\.."
 
@@ -14,4 +17,5 @@ start "AMA Client" cmd /k "cd /d %CD%\client && npm run dev"
 
 echo.
 echo Mock API: http://localhost:6001
-echo Client:   http://localhost:5173
+echo Client:   http://localhost:5173   (log in as admin, maker1, taker1, taker2 or acc1 - any password)
+echo Stop both with scripts\stop-mock.cmd

@@ -8,6 +8,7 @@ if [ -s "$HOME/.nvm/nvm.sh" ]; then . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1; fi
 if ! command -v node >/dev/null 2>&1; then
   echo
   echo "  Node.js is not installed on this Mac."
+  echo "  Install the LTS version from https://nodejs.org and run this again."
   echo
   read -n 1 -s -r -p "Press any key to close..."
   exit 1

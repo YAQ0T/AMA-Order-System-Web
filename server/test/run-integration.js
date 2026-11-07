@@ -37,6 +37,7 @@ const SUITES = [
   { file: 'open-orders.test.mjs', telegram: true },
   { file: 'backup.test.mjs' },
   { file: 'security.test.mjs' },
+  { file: 'order-marks.test.mjs', telegram: true },
 ];
 const REAL_DB = process.env.DB_NAME;
 const TEST_DB = `${REAL_DB}_test`;

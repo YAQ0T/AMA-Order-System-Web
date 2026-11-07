@@ -1,9 +1,9 @@
 import { api } from './client';
-import { statsSchema, userSchema, activityLogSchema, orderSchema, parseOr } from './schemas';
+import { statsSchema, userSchema, activityListSchema, orderSchema, parseOr } from './schemas';
 import { z } from 'zod';
 
 const userListSchema = z.array(userSchema);
-const logListSchema = z.array(activityLogSchema);
+const logListSchema = activityListSchema;
 const orderListSchema = z.array(orderSchema);
 
 export async function fetchStats() {

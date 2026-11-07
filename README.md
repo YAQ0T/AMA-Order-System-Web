@@ -8,6 +8,10 @@ AMA-Order-System-Web/
 ├── Start AMA (Windows).cmd     double-click to start  (Mac: Start AMA (Mac).command)
 ├── Stop AMA (Windows).cmd      double-click to stop   (Mac: Stop AMA (Mac).command)
 ├── Restore AMA (Windows).cmd   restore a backup       (Mac: Restore AMA (Mac).command)
+├── Autostart AMA (Windows).cmd start at login on/off  (Mac: Autostart AMA (Mac).command)
+├── Cloudflare AMA (Windows).cmd the online link menu  (Mac: Cloudflare AMA (Mac).command)
+├── ONLINE-ACCESS.md  reaching the system from anywhere (Cloudflare Tunnel), in Arabic
+├── TESTING.md        what is tested and how
 ├── client/          React 19 + Vite 7 web app
 ├── server/          Node/Express + MySQL API
 ├── backups/         database backups (created automatically, not in git)
@@ -26,6 +30,7 @@ AMA-Order-System-Web/
 | **Stop AMA (Windows).cmd** / **Stop AMA (Mac).command** | بيطفي النظام |
 | **Restore AMA (Windows).cmd** / **Restore AMA (Mac).command** | بيرجّع البيانات من نسخة احتياطية (بياخد نسخة أمان من الوضع الحالي قبل أي تغيير) |
 | **Autostart AMA (Windows).cmd** / **Autostart AMA (Mac).command** | بيشغّل/بيلغي تشغيل النظام لحاله مع تسجيل الدخول للجهاز |
+| **Cloudflare AMA (Windows).cmd** / **Cloudflare AMA (Mac).command** | الرابط الأونلاين: ربط، تشغيل، إيقاف، فحص كامل، سجل، إزالة (قائمة بالأرقام) |
 
 **الوصول من أي مكان بالعالم** (والنظام على جهاز الشركة): شوف **[ONLINE-ACCESS.md](ONLINE-ACCESS.md)** — رابط https ثابت عن طريق Cloudflare Tunnel، بدون فتح بورتات، وفيه كمان نقل النظام بين الماك والويندوز وإيقاف النظام القديم.
 
@@ -121,6 +126,11 @@ npm run dev
 Listens on `http://localhost:6001` (override with `PORT`). It prints the LAN
 addresses it is reachable on.
 
+`npm run dev` runs with **Telegram switched off** (`TELEGRAM=off`): only one
+program may read the bot's messages, and a developer's copy must never take
+them from the real system. To try Telegram, use a separate test bot's token
+with `npm start` - or the integration tests, which bring a fake Telegram.
+
 ### 3. Client
 
 ```bash
@@ -139,7 +149,8 @@ node tools/mock-api.js     # port 6001, in-memory seed data
 cd client && npm run dev
 ```
 
-Log in as `admin`, `maker1`, `taker1`, `taker2`, `acc1`, or `newbie` (pending
+(or in one go: `scripts\start-mock.cmd` on Windows, `scripts/start-mock.sh` on
+a Mac.) Log in as `admin`, `maker1`, `taker1`, `taker2`, `acc1`, or `newbie` (pending
 approval) with any password. This exists so the UI can be worked on without
 MySQL; it stores nothing and resets on restart.
 
@@ -168,10 +179,10 @@ Four roles, same as the Flutter app:
 
 | Role | Arabic | Can do |
 |---|---|---|
-| maker | منشئ الطلبات | Create orders (for chosen takers, or open to any taker), manage active + archived, bulk-send archived, print, reports |
-| taker | المجهّز | See assigned orders, take open ones, mark items collected/unavailable, add items, advance status |
+| maker | منشئ الطلبات | Create orders (for chosen takers, or open to any taker; optionally marked **online**, shown blue), manage active + archived, bulk-send archived, print, reports. **Sees only their own orders** |
+| taker | المجهّز | See assigned orders, take open ones, mark items collected/unavailable, add items, change quantities, advance status. Not the customer, description or city (403) |
 | accounter | المحاسب | See completed orders, send to ERP, print |
-| admin | المدير | Stats, approve / deactivate users, set passwords, all orders, activity logs, reports, backups |
+| admin | المدير | Stats, approve / deactivate users, set passwords, **all** orders (create, edit, delete), activity logs, reports, backups. Orders the admin creates are **urgent**: red, first in the takers' lists, 🔴 on Telegram |
 
 Order lifecycle: `pending` → `in-progress` → `completed` → `entered_erp`, with
 `archived` as a draft state outside the flow. "النشطة" in the UI means
@@ -179,8 +190,10 @@ Order lifecycle: `pending` → `in-progress` → `completed` → `entered_erp`, 
 
 ### Open orders ("مفتوح لأي مجهّز")
 
-Instead of picking takers, the maker can tick **مفتوح لأي مجهّز** — when
-creating an order, when sending archived orders out, or in the edit window. The
+Orders are **open to any taker by default**: **مفتوح لأي مجهّز** starts ticked
+when creating an order and when sending archived orders out (untick it to pick
+takers by name; the next order starts open again). It can also be set in the
+edit window. The
 order then appears for every taker under **طلبات مفتوحة** (with a count on the
 tab), and every taker linked to Telegram gets a "🔓 طلب مفتوح" message. The first
 taker to tap **خذ الطلب** gets it: it moves to their «طلباتي», disappears for
@@ -470,15 +483,55 @@ drop the column and its data. Nothing reads or writes it.
     (`ORDER_LOG_KEEP_DAYS`), and the console gets one line per event instead of
     pretty-printed JSON. A rejected promise is logged instead of stopping the
     server, and responses carry `nosniff` / no-framing headers.
+18. **Errors never show internals.** An unexpected failure answers
+    `{"error":"Server error"}` (the app says «حدث خطأ في الخادم») and the details
+    - SQL, table names, file paths - go only to the server log
+    (`utils/serverError.js`). It used to send the raw error text, e.g. the
+    database and table name. A body that is not valid JSON or a broken address
+    gets a short JSON 400 instead of Express's HTML page with the full stack
+    trace, an unknown `/api/...` address a JSON 404.
+19. **Browser protection headers**: a Content-Security-Policy (the page may only
+    run the app's own scripts and talk to this server; nobody may frame it),
+    Permissions-Policy (no camera/microphone/location) and, on the online https
+    link only, HSTS. Printing still works (it needs inline styles, which are
+    allowed).
+20. **Malformed input is a clear 400, never a crash**: an item that is not an
+    object, a name that is a list, a quantity of `true`, an item status that does
+    not exist, a quantity that rounds to 0, a taker id of `true` (which used to
+    pick user #1); query strings the app never sends (`?status=a&status=b`,
+    `?search[x]=1`, a negative `limit`/`offset`) are read as plain text. Each of
+    these used to end in a 500.
+21. **Push subscriptions only to the browsers' own push services** (https on
+    Google / Mozilla / Microsoft / Apple hosts). The server sends each push as a
+    request to that address, so any logged-in user could otherwise have made it
+    call a machine of their choosing, the company network included.
+22. **A taker works on the items and the status only.** The customer name,
+    description and city are the maker's and the admin's (403 for a taker). The
+    app never offered it, but the API allowed it.
+23. **The description.** An order created without one now stores none; it used
+    to store the English "Order with 3 items", which showed on cards, printouts
+    and Telegram (older orders' filler is hidden the same way). Emptying the box
+    in the edit window now clears it - it used to come back.
+24. **The admin overview showed all zeros** and no recent activity, and the full
+    log («مع كل تعديلات الطلبات») was always empty: the server sent those
+    entries without a user id / in a different shape and the app refused the
+    whole list. Fixed on both sides, and one entry the app cannot read is now
+    left out instead of blanking the page. "Waiting for approval" no longer
+    counts deactivated accounts.
+25. **Developer tools never interfere with the real system.** `npm run dev` /
+    `start-dev` run with `TELEGRAM=off`; `stop-dev` / `stop-mock` leave the
+    process Start AMA recorded alone. Five old debugging scripts were removed
+    from `server/` (one printed every user's password hash).
 
 ### Still worth knowing
 
-- **HTTP only.** Fine on the shop's own network. Do **not** forward the port to
-  the internet as it is (the Flutter app points at a public address,
-  `213.6.226.163`): passwords would cross the internet in plain text. Use a VPN,
-  or put HTTPS in front first.
-- CORS allows any origin; harmless here because logins travel in a header, not a
-  cookie.
+- **Plain http on the local network** - fine inside the shop. From anywhere
+  else the system is reached only through the Cloudflare tunnel, which is https
+  (ONLINE-ACCESS.md). Never forward the router port instead: the server refuses
+  direct internet connections (403), and passwords would cross the internet in
+  plain text.
+- No CORS headers are sent unless `CORS_ORIGINS` lists an origin; the app is
+  served from the server itself and needs none.
 - Two people making a **structural** edit to one order in the same second can
   still lose one of the two changes (see TESTING.md). Ticks are not affected.
 - Reports page through the whole history in the browser (see above).
@@ -500,38 +553,45 @@ The web client uses the hyphenated key throughout.
 | `client/` | `npm run build` | Production build into `dist/` |
 | `client/` | `npm run preview` | Serve the built output |
 | `client/` | `npm run lint` | ESLint |
-| `client/` | `npm test` | Unit tests (57) |
+| `client/` | `npm test` | Unit tests (64) |
 | `server/` | `npm run db:create` | Create the database with utf8mb4 |
 | `server/` | `npm run db:check` | Verify connection, charset and Arabic round-trip |
 | `server/` | `npm run db:backup` | Take a backup now |
 | `server/` | `npm run db:restore` | Restore a backup (stop the system first) |
-| `server/` | `npm run test:integration` | 346 checks in 6 suites against the real server + MySQL, on a throwaway database. Add `-- <name>` to run one suite, e.g. `-- security` |
-| `server/` | `npm run dev` | API with nodemon |
-| `server/` | `npm start` | API |
+| `server/` | `npm run test:integration` | 424 checks in 7 suites against the real server + MySQL, on a throwaway database. Add `-- <name>` to run one suite, e.g. `-- security` |
+| `server/` | `npm run dev` | API with nodemon (restarts on code changes), Telegram off |
+| `server/` | `npm run dev:alt-port` | The same on port 3004 |
+| `server/` | `npm start` | API (what Start AMA runs, as `node index.js`) |
 | root | `node tools/mock-api.js` | Fake API, no database |
 
 ### Scripts
 
 | Script | What |
 |---|---|
-| `Start AMA` / `Stop AMA` / `Restore AMA` | Daily use - see the top of this file (`scripts/launch.js`) |
-| `scripts\start-dev.cmd` | API + client, each in its own window |
+| `Start AMA` / `Stop AMA` / `Restore AMA` / `Autostart AMA` | Daily use - see the top of this file (`scripts/launch.js`) |
+| `Cloudflare AMA` | The online link: connect, start, stop, test, log, remove (`scripts/tunnel.js`, see ONLINE-ACCESS.md) |
+| `scripts\start-dev.cmd` | Developers: API (real database, Telegram off) + client, each in its own window |
 | `scripts\stop-dev.cmd` | Stops both |
 | `scripts\start-mock.cmd` | Mock API + client, no database needed |
 | `scripts\stop-mock.cmd` | Stops both |
-| `scripts/start-dev.sh` | Same as start-dev, macOS/Linux/Git Bash |
-| `scripts/stop-dev.sh` | Same as stop-dev |
-| `scripts/build.sh` | Production build of the client |
+| `scripts/start-dev.sh` | Same as start-dev, macOS/Linux/Git Bash (Ctrl+C stops both) |
+| `scripts/start-mock.sh` | Same as start-mock, macOS/Linux/Git Bash (Ctrl+C stops both) |
+| `scripts/stop-dev.sh` / `stop-mock.sh` | Same as stop-dev / stop-mock |
+| `scripts/build.sh` | Production build of the client (Start AMA does this by itself when needed) |
 
 The stop scripts work by **port** (6001 and 5173), not PID files — the same
 fallback approach as `stop_ama.command` in the Flutter repo. That means they
 also clean up servers you started by hand or left behind after closing a
 terminal. They check the process is actually `node.exe` before killing it, so
-they will not take down something unrelated sitting on those ports.
+they will not take down something unrelated sitting on those ports - and they
+leave **the real system** alone (also node on 6001): its process id is in
+`.ama_runtime/server.pid`, and they say "use Stop AMA" instead.
 
 `stop-dev` and `stop-mock` do the same thing; both names exist so whichever
 start script you used has an obvious counterpart. You cannot run start-dev and
-start-mock at the same time anyway — they both want port 6001.
+start-mock at the same time anyway — they both want port 6001 (as does the real
+system, so on the computer that runs it, use the mock on another port:
+`PORT=6011 node tools/mock-api.js` with `VITE_API_URL=http://localhost:6011`).
 
 ## Testing
 
@@ -567,7 +627,7 @@ server), and it is free.
 **Only one running server may use a given bot token.** Telegram hands each
 update to one listener; a second server with the same token gets "conflict"
 errors (the log says so). The integration tests switch Telegram off for exactly
-this reason.
+this reason, and so do the dev scripts (`npm run dev` sets `TELEGRAM=off`).
 
 ### How a taker links their account
 

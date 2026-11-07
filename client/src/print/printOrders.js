@@ -1,5 +1,5 @@
 import { statusLabel, T, CURRENCY } from '../lib/labels';
-import { formatDateTime, formatQuantity, lineTotal, orderTitle } from '../lib/format';
+import { formatDateTime, formatQuantity, lineTotal, orderTitle, orderDescription } from '../lib/format';
 
 /**
  * Printing is done by the browser, not by a JS PDF library.
@@ -59,6 +59,9 @@ function orderPage(order, { showPrices, isLast }) {
     <section class="page" ${isLast ? '' : 'style="page-break-after: always;"'}>
       <header class="head">
         <h1>${escapeHtml(T.appName)}</h1>
+        ${order.isUrgent || order.isOnline
+          ? `<div class="marks">${order.isUrgent ? `<span class="mark urgent">${escapeHtml(T.urgentOrderLong)}</span>` : ''}${order.isOnline ? `<span class="mark online">${escapeHtml(T.onlineOrder)}</span>` : ''}</div>`
+          : ''}
       </header>
 
       <div class="meta">
@@ -70,7 +73,7 @@ function orderPage(order, { showPrices, isLast }) {
         ${order.Maker ? `<div><b>${escapeHtml(T.maker)}:</b> ${escapeHtml(order.Maker.username)}</div>` : ''}
         ${takers ? `<div><b>${escapeHtml(T.takers)}:</b> ${escapeHtml(takers)}</div>` : ''}
         ${order.Accounter ? `<div><b>${escapeHtml(T.accounter)}:</b> ${escapeHtml(order.Accounter.username)}</div>` : ''}
-        ${order.description ? `<div class="wide"><b>${escapeHtml(T.description)}:</b> ${escapeHtml(order.description)}</div>` : ''}
+        ${orderDescription(order) ? `<div class="wide"><b>${escapeHtml(T.description)}:</b> ${escapeHtml(orderDescription(order))}</div>` : ''}
       </div>
 
       <table class="items">
@@ -136,6 +139,11 @@ const PRINT_CSS = `
     margin-bottom: 12px;
   }
   .head h1 { margin: 0; font-size: 20px; }
+  /* Bordered as well as coloured, so the marks survive black-and-white printing. */
+  .marks { display: flex; gap: 6px; }
+  .mark { border: 2px solid; border-radius: 6px; padding: 2px 10px; font-size: 13px; font-weight: 700; }
+  .mark.urgent { color: #b91c1c; border-color: #b91c1c; }
+  .mark.online { color: #0369a1; border-color: #0369a1; }
 
   .meta {
     display: flex;

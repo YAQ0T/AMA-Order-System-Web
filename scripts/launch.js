@@ -6,10 +6,16 @@
  *   "Start AMA (Windows).cmd"   / "Start AMA (Mac).command"    -> node scripts/launch.js start
  *   "Stop AMA (Windows).cmd"    / "Stop AMA (Mac).command"     -> node scripts/launch.js stop
  *   "Restore AMA (Windows).cmd" / "Restore AMA (Mac).command"  -> node scripts/launch.js restore
+ *   "Autostart AMA (Windows).cmd" / "Autostart AMA (Mac).command" -> node scripts/launch.js autostart
  *
  * start: checks Node, creates server/.env if missing, installs packages and
  * builds the web client when needed, starts the server in the background,
  * waits until the database is ready, then opens the browser.
+ * stop: stops the server this started (and any other copy on its port).
+ * restore: stops the server if needed, runs server/restore-db.js (pick a
+ * backup, type RESTORE; a safety backup is taken first), then offers to start.
+ * autostart: turns "start the system when I log in" on or off (a Mac login
+ * item, or a file in the Windows Startup folder - see the bottom of this file).
  *
  * The server keeps running after the window is closed. Its output goes to
  * .ama_runtime/server.log, and its process id to .ama_runtime/server.pid -

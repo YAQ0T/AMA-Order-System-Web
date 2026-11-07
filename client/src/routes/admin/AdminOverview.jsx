@@ -67,7 +67,7 @@ export default function AdminOverview() {
         ) : (
           <ul>
             {stats.recentActivity.map((log) => (
-              <ActivityItem key={log.id} log={log} />
+              <ActivityItem key={`${log.id}-${log.action}`} log={log} />
             ))}
           </ul>
         )}
