@@ -1,5 +1,6 @@
 #!/bin/bash
-# Double-click: the online link (Cloudflare tunnel) - connect, start, stop, test, log. See scripts/tunnel.js.
+# Double-click: the online link (Cloudflare tunnel) - a menu to connect, start, stop, test,
+# show the log, remove and update. Step by step: CLOUDFLARE.md. The code: scripts/tunnel.js.
 cd "$(dirname "$0")" || exit 1
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"

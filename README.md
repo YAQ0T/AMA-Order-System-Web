@@ -11,6 +11,7 @@ AMA-Order-System-Web/
 ├── Autostart AMA (Windows).cmd start at login on/off  (Mac: Autostart AMA (Mac).command)
 ├── Cloudflare AMA (Windows).cmd the online link menu  (Mac: Cloudflare AMA (Mac).command)
 ├── ONLINE-ACCESS.md  reaching the system from anywhere (Cloudflare Tunnel), in Arabic
+├── CLOUDFLARE.md     the tunnel step by step, screen by screen, on the Mac and on Windows (Arabic)
 ├── TESTING.md        what is tested and how
 ├── client/          React 19 + Vite 7 web app
 ├── server/          Node/Express + MySQL API
@@ -569,7 +570,7 @@ The web client uses the hyphenated key throughout.
 | Script | What |
 |---|---|
 | `Start AMA` / `Stop AMA` / `Restore AMA` / `Autostart AMA` | Daily use - see the top of this file (`scripts/launch.js`) |
-| `Cloudflare AMA` | The online link: connect, start, stop, test, log, remove (`scripts/tunnel.js`, see ONLINE-ACCESS.md) |
+| `Cloudflare AMA` | The online link: connect, start, stop, test, log, remove, update cloudflared (`scripts/tunnel.js`; step by step in CLOUDFLARE.md). `node scripts/tunnel.test.js` runs every option on a pretend Mac and Windows PC |
 | `scripts\start-dev.cmd` | Developers: API (real database, Telegram off) + client, each in its own window |
 | `scripts\stop-dev.cmd` | Stops both |
 | `scripts\start-mock.cmd` | Mock API + client, no database needed |

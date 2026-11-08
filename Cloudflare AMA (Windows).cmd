@@ -1,5 +1,6 @@
 @echo off
-REM Double-click: the online link (Cloudflare tunnel) - connect, start, stop, test, log. See scripts\tunnel.js.
+REM Double-click: the online link (Cloudflare tunnel) - a menu to connect, start, stop, test,
+REM show the log, remove and update. Step by step: CLOUDFLARE.md. The code: scripts\tunnel.js.
 setlocal
 title AMA Order System - Online link (Cloudflare)
 cd /d "%~dp0"

@@ -12,12 +12,12 @@
 
 > السيرفر صار **يرفض أي اتصال مباشر من الإنترنت**، حتى لو في بورت مفتوح بالراوتر بالغلط (زي النظام القديم). الطريق الوحيد من برّا هو الرابط الآمن. (للتعطيل: `LAN_ONLY=off` في `server/.env` — لا يُنصح.)
 
-### وين وصلتوا (آخر فحص)
+### وين وصلتوا (آخر فحص: 8 نوفمبر 2026)
 
-- ✅ الدومين صار على **Cloudflare** (`kolton.ns.cloudflare.com` و `maleah.ns.cloudflare.com`)، و `amaorders.work` و `www` بيأشروا على Cloudflare. يعني الخطوات **2 أ** و **2 ب** خلصت.
-- ❌ الرابط بيرجّع **خطأ 530** = ولا جهاز مربوط بالنفق هلّق. **الجاي:** على الجهاز اللي عليه النظام شغّل **Cloudflare AMA** ← `1` (الخطوة 2 ج تحت).
-- ⚠️ **Always Use HTTPS** لسا مش مفعّلة (الخطوة 2 ج، رقم 4).
-- قبل النقل كان: مُدار من GoDaddy، وبيأشر على عنوان النظام القديم `213.6.226.163`، وما عليه إيميل.
+- ✅ الدومين على **Cloudflare**، و `amaorders.work` و `www` موجهين على النفق.
+- ❌ **ولا جهاز مربوط بالنفق لسا** (الرابط بيعطي **Error 1033**). **الجاي:** على الماك: **Cloudflare AMA** ← `1` — بالتفصيل بـ **[CLOUDFLARE.md](CLOUDFLARE.md)**.
+- ⚠️ **Always Use HTTPS** لسا مش مفعّلة ([CLOUDFLARE.md](CLOUDFLARE.md)، أ5).
+- ⚠️ **النظام القديم لسا مكشوف على الإنترنت** على `213.6.226.163:6001` (الخطوة 4 تحت).
 
 ---
 
@@ -51,74 +51,15 @@
    - عشان يسجّل دخول لحاله: System Settings ← Users & Groups ← Automatically log in as (مش متاحة إذا FileVault مفعّل).
 8. **النوم**: طول ما النظام شغّال، Start AMA بيمنع الماك من النوم وهو موصول بالكهربا (الشاشة بتطفي عادي). إذا ماك بوك: خلّيه موصول بالكهربا والغطاء مفتوح.
 
-## الخطوة 2: نقل الدومين لـ Cloudflare وعمل النفق (مرة وحدة، من أي متصفح)
+## الخطوة 2: Cloudflare — النفق والربط والفحص
 
-### أ. حساب Cloudflare وإضافة الدومين
-1. اعمل حساب على [dash.cloudflare.com](https://dash.cloudflare.com) بإيميل الشركة.
-2. **Add a domain** ← اكتب `amaorders.work` ← خلّيه يعمل Quick scan ← اختار الخطة **Free**.
-3. رح يعرضلك السجلات اللي لقاها: سجلات **A** لـ `amaorders.work` و `www` بتأشر على `213.6.226.163` (النظام القديم) — **احذفهم الاتنين**. النفق رح يحط مكانهم سجلات جديدة.
-4. رح يعطيك **عنوانين nameservers** (شي زي `xxxx.ns.cloudflare.com` و `yyyy.ns.cloudflare.com`). خلّي الصفحة مفتوحة.
+كل شي بخص Cloudflare مشروح **شاشة بشاشة على الماك وعلى الويندوز** بـ **[CLOUDFLARE.md](CLOUDFLARE.md)**:
 
-### ب. تغيير الـ nameservers في GoDaddy
-1. ادخل على حسابك بـ [godaddy.com](https://www.godaddy.com) ← **My Products** ← جنب `amaorders.work` اختار **DNS** (أو Manage DNS).
-2. بقسم **Nameservers** ← **Change Nameservers** ← اختار **I'll use my own nameservers**.
-3. احذف الموجودين (`ns33/ns34.domaincontrol.com`) وحط العنوانين اللي أعطاك ياهم Cloudflare ← **Save** ← أكّد التحذير.
-4. ارجع لـ Cloudflare واكبس **Check nameservers**. التفعيل بياخد من دقائق لساعات، وبيوصلك إيميل لما يصير الدومين **Active**.
+- داخل موقع Cloudflare: النفق، نسخ أمر التركيب، الطرق (`amaorders.work` و `www` ← `http://localhost:6001`)، و Always Use HTTPS.
+- على الجهاز: دبل كليك **Cloudflare AMA (Mac).command** / **Cloudflare AMA (Windows).cmd** ← `1` ← الصق الأمر ← وبيكمّل لحاله (بيركّب cloudflared، بيربط، بيحفظ الرابط، بيفحص).
+- القائمة كاملة (`1` ربط، `2` تشغيل، `3` إيقاف، `4` فحص، `5` سجل، `6` إزالة، `7` تحديث)، ومعنى كل سطر بالفحص، ورسائل الخطأ بالمتصفح، والأوامر اليدوية للفني.
 
-(أسماء الأزرار عند GoDaddy وCloudflare ممكن تختلف شوي مع الوقت، بس الخطوات نفسها.)
-
-### ج. ربط جهاز النظام بالنفق
-1. بـ Cloudflare: **Networking ← Tunnels** (أو Zero Trust ← Networks ← Tunnels) ← افتح النفق (أو **Create a tunnel** ← نوع **Cloudflared** ← سمّيه `ama-orders`) ← اختار نظام الجهاز (**macOS** أو **Windows**). رح يطلعلك **أمر تركيب فيه توكن طويل** — انسخه. هاد سرّي، ما تبعته لحدا (ولا إلي).
-2. على جهاز النظام: دبل كليك **Cloudflare AMA (Mac).command** أو **Cloudflare AMA (Windows).cmd** ← اكتب `1` ← **الصق الأمر كله** (أو التوكن لحاله) ← Enter.
-   - بيركّب cloudflared لحاله إذا مش موجود (ماك: Homebrew، ويندوز: winget — إذا سألك توافق على الشروط، جاوب بنفسك).
-   - **ويندوز** رح يطلب إذن (نعم/Yes). **الماك** رح يطلب كلمة سر الماك.
-   - بعدين بيسألك عن الرابط: اكتب `https://amaorders.work` ← بيحفظه بـ `server/.env` ← وبيسألك تعيد تشغيل النظام (اكتب `y`).
-   - بالآخر بيعمل **فحص كامل** ولازم يطلع: `Everything works`.
-   - بالداشبورد كمان لازم يصير النفق **Healthy / Connected**.
-3. **اربط الدومين بالنظام** — داخل النفق ← **Routes** / Public hostnames ← **Add** (Published application) — مرتين:
-   | Subdomain | Domain | Service |
-   |---|---|---|
-   | (فاضي) | `amaorders.work` | HTTP ← `localhost:6001` |
-   | `www` | `amaorders.work` | HTTP ← `localhost:6001` |
-4. بـ Cloudflare: **SSL/TLS ← Edge Certificates ← Always Use HTTPS** ← فعّلها (بتحوّل أي حدا بيكتب `http://` لـ `https://`).
-
-### د. التأكد
-1. **Cloudflare AMA** ← `4` (Test) ← لازم كل الأسطر `OK`.
-2. جرّب من تلفون على **الداتا** (مش الواي فاي): افتح `https://amaorders.work` ← لازم تطلع صفحة الدخول.
-
-(إذا بتحب تعملها يدوياً بدل ملف Cloudflare AMA: `APP_URL=https://amaorders.work` بملف `server/.env`، والأوامر: ماك `brew install cloudflared` و `sudo cloudflared service install التوكن`؛ ويندوز من Command Prompt كمسؤول: `cloudflared.exe service install التوكن`.)
-
-## ملف Cloudflare AMA — التشغيل والإيقاف والفحص
-
-دبل كليك على **Cloudflare AMA (Mac).command** أو **Cloudflare AMA (Windows).cmd**. فوق بيعرض الحالة (cloudflared مركّب؟ النفق شغّال؟ شو الرابط؟)، وتحتها:
-
-| الرقم | شو بيعمل | متى تستعمله |
-|---|---|---|
-| `1` Connect | بيركّب cloudflared وبيربط الجهاز بالنفق بالتوكن، وبيحفظ الرابط | أول مرة على كل جهاز |
-| `2` Start | بيشغّل النفق | بعد ما وقّفته |
-| `3` Stop | بيوقّف النفق — الرابط الأونلاين بيوقف، وجوّا الشركة النظام بيضل شغّال | صيانة، أو قبل نقل النظام |
-| `4` Test | فحص كامل وبيحكيلك شو تصلّح | أي وقت حاسس في مشكلة |
-| `5` Log | آخر رسائل النفق | إذا الفحص ما وضّح المشكلة |
-| `6` Remove | بيشيل النفق من هالجهاز نهائياً | قبل نقل النظام لجهاز ثاني |
-
-(النفق بيشتغل لحاله مع تشغيل الجهاز، حتى لو وقّفته قبل الإطفاء — للإيقاف الدائم استعمل `6`.)
-
-**شو معنى أسطر الفحص (`4`):**
-
-| السطر | إذا طلع `XX` |
-|---|---|
-| cloudflared is installed | اختار `1` |
-| The tunnel is connected on this computer | اختار `1` والصق أمر التركيب |
-| The tunnel is running | اختار `2` |
-| The system is running on this computer | شغّل **Start AMA** |
-| APP_URL is https://… | اختار `1` (بيسألك عن الرابط)، أو حطه بـ `server/.env` |
-| amaorders.work is managed by … cloudflare | الـnameservers عند GoDaddy لازم يكونوا تبع Cloudflare |
-| amaorders.work has an address | ضيف الـRoute بالنفق (الخطوة 2 ج، رقم 3) |
-| … reaches the system on this computer | شوف الرقم بالسطر: **530** = ولا جهاز مربوط بالنفق؛ **502** = النفق مربوط بس النظام طافي على هاد الجهاز؛ **404** = في Route ناقص |
-| … answers from ANOTHER computer | النظام شغّال على جهازين! وقّف واحد (Stop AMA + `6`) |
-| http:// is sent on to https:// (`!`) | فعّل **Always Use HTTPS** بـ Cloudflare |
-
-السطر الأخير لازم يكون: `Everything works. Staff can open https://amaorders.work from anywhere.`
+باختصار: بعد الخطوة 1، شغّل **Cloudflare AMA** ← `1`، ولازم آخر سطر يكون `Everything works. Staff can open https://amaorders.work from anywhere.`
 
 ## الخطوة 3 (اختيارية): حماية إضافية بـ Cloudflare Access
 
@@ -136,21 +77,12 @@
 1. على الماك: شغّل **stop_ama.command** من مجلد `AMA-Order-System-Flutter`.
 2. إذا كان بيشتغل لحاله مع تشغيل الماك: System Settings ← General ← Login Items ← شيله.
 3. **الراوتر**: افتح صفحة الراوتر (غالباً `192.168.1.1`) ← Port Forwarding / NAT / Virtual Server ← **احذف** القاعدة اللي بتحوّل البورت **6001** (و**6173** إذا موجودة) للماك. النظام الجديد ما بيحتاج أي بورت مفتوح.
-4. تأكد من تلفون على الداتا: افتح `http://213.6.226.163:6001` ← **لازم ما يفتح شي**.
+4. تأكد من تلفون على الداتا: افتح `http://213.6.226.163:6001` ← **لازم ما يفتح شي**. (بفحص 8 نوفمبر 2026 كان لسا بيرد، وبيعطي قائمة المجهّزين لأي حدا بدون تسجيل دخول.)
 5. خبّر الموظفين: التطبيق القديم وقف، والرابط الجديد هو **`https://amaorders.work`**
 
 ## نقل النظام لجهاز ثاني (من الماك للويندوز أو العكس)
 
-1. على الجهاز الحالي: خذ نسخة احتياطية (صفحة المدير ← «خذ نسخة احتياطية الآن»، أو بالـTerminal داخل `server`: `npm run db:backup`)، بعدين **Stop AMA**.
-2. انسخ أحدث ملف من مجلد `backups` لمجلد `backups` على الجهاز الجديد.
-3. **شيل النفق** عن الجهاز القديم: **Cloudflare AMA** ← `6`.
-4. على الجهاز الجديد: **Restore AMA** ← اختار النسخة ← **Start AMA**.
-5. على الجهاز الجديد: **Cloudflare AMA** ← `1` ← الصق أمر التركيب (من الداشبورد: النفق ← Configure، نفس التوكن).
-6. **Cloudflare AMA** ← `4`: لازم كله `OK`. الرابط للتلفونات بيضل نفسه: `https://amaorders.work`
-
-> أي طلب بينعمل على الجهاز القديم **بعد** النسخة ما بينتقل — عشان هيك: خذ النسخة ووقّف بنفس اللحظة.
-
-ملاحظة للويندوز: cloudflared ما بيحدّث حاله هناك؛ حدّثه مرة بالسنة (Cloudflare بتدعم النسخ اللي عمرها أقل من سنة).
+الخطوات بالترتيب (نسخة احتياطية ← Stop AMA ← إزالة النفق ← Restore AMA ← ربط النفق على الجهاز الجديد) بـ **[CLOUDFLARE.md](CLOUDFLARE.md)، القسم 11**. والتحديث الدوري لـ cloudflared (الويندوز ما بيحدّثه لحاله) بالقسم 12.
 
 ## للموظفين
 
