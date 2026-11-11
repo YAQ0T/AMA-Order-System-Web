@@ -8,6 +8,7 @@
  *   "Restore AMA (Windows).cmd" / "Restore AMA (Mac).command"  -> node scripts/launch.js restore
  *   "Autostart AMA (Windows).cmd" / "Autostart AMA (Mac).command" -> node scripts/launch.js autostart
  *   "Demo AMA (Windows).cmd"    / "Demo AMA (Mac).command"     -> node scripts/launch.js demo
+ *   "Update AMA (Windows).cmd"  / "Update AMA (Mac).command"   -> node scripts/launch.js update
  *
  * start: checks Node, creates server/.env if missing, installs packages and
  * builds the web client when needed, starts the server in the background,
@@ -20,6 +21,9 @@
  * demo ("Demo AMA"): a separate copy to try things on - its own database,
  * port 6060, Telegram off, sample accounts and orders; it stops when its
  * window closes. The real system and its data are never touched.
+ * update ("Update AMA"): the newest version from GitHub - with git for a copy
+ * made with git, else from the ZIP - after a backup of the data; settings,
+ * backups and logs are kept, and a running system is restarted. See below.
  *
  * The server keeps running after the window is closed. Its output goes to
  * .ama_runtime/server.log, and its process id to .ama_runtime/server.pid -
@@ -928,21 +932,325 @@ async function autostart() {
 }
 
 // ---------------------------------------------------------------------------
+// Update (behind "Update AMA"): the newest version from GitHub, keeping this
+// computer's settings and data.
+//
+//  - A copy made with git (it has a .git folder): git fetch, then a
+//    fast-forward merge. A copy with changes or commits of its own is left
+//    alone, with nothing changed.
+//  - A copy downloaded as a ZIP: the newest ZIP of the main branch. Each
+//    program file in it replaces the one here if different. Never written or
+//    deleted, even if a ZIP had them: server/.env (passwords, the Telegram
+//    token...), backups/, logs, .ama_runtime/, installed packages and the
+//    built web client. Files the PREVIOUS update brought that the new version
+//    no longer has are removed - no other file ever is.
+//
+// Before anything changes, the new version is downloaded and checked, the
+// person confirms, and a backup of the data is taken ("before-update"). The
+// system is stopped for the update and started again if it was running - by
+// the NEW launcher, which also updates packages and rebuilds the web client.
 
-const commands = { start, stop: () => stopServer(), restore, autostart, demo };
-const command = commands[process.argv[2]];
-if (!command) {
-    console.error('usage: node scripts/launch.js start|stop|restore|autostart|demo');
-    process.exit(2);
+const UPDATE_REPO = 'YAQ0T/AMA-Order-System-Web';
+const UPDATE_BRANCH = 'main';
+const UPDATE_ZIP_URL = `https://github.com/${UPDATE_REPO}/archive/refs/heads/${UPDATE_BRANCH}.zip`;
+const UPDATE_STATE = path.join(RUNTIME, 'update.json');
+
+/** Relative '/'-separated paths an update never writes or deletes. */
+function isKeptPath(rel) {
+    const parts = String(rel).split('/').map((p) => p.toLowerCase());
+    const name = parts[parts.length - 1];
+    if (/^\.env(\..+)?$/.test(name) && name !== '.env.example') return true; // passwords, tokens
+    if (name === '.ds_store' || /\.(sql\.gz|sql\.gz\.partial|jsonl|log)$/.test(name)) return true; // backups, logs
+    if (['.git', '.ama_runtime', 'backups'].includes(parts[0])) return true;
+    if (parts.includes('node_modules') || parts.includes('logs')) return true;
+    if (parts[0] === 'client' && parts[1] === 'dist') return true;
+    return false;
 }
 
-command().catch((err) => {
-    if (err instanceof Stop) {
-        say();
-        say(`  ${err.message}`);
-        say();
-    } else {
-        console.error('\n  Unexpected error:', err);
+/** Every regular file under `dir`, as relative '/'-separated paths. Links are skipped. */
+function listFiles(dir) {
+    const out = [];
+    const walk = (abs, rel) => {
+        for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+            const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) walk(path.join(abs, entry.name), childRel);
+            else if (entry.isFile()) out.push(childRel);
+        }
+    };
+    walk(dir, '');
+    return out.sort();
+}
+
+const fromRel = (root, rel) => path.join(root, ...rel.split('/'));
+const isInside = (root, p) => {
+    const r = path.relative(root, p);
+    return Boolean(r) && !r.startsWith('..') && !path.isAbsolute(r);
+};
+
+function sameContent(a, b) {
+    try {
+        if (fs.statSync(a).size !== fs.statSync(b).size) return false;
+        return fs.readFileSync(a).equals(fs.readFileSync(b));
+    } catch {
+        return false;
     }
-    process.exitCode = 1;
-});
+}
+
+/**
+ * What updating `root` from the unpacked new version in `from` would do.
+ * `previous`: the files the last update brought (null when not known).
+ */
+function planUpdate(from, root, previous = null) {
+    const files = listFiles(from).filter((rel) => !isKeptPath(rel));
+    const changed = [];
+    const added = [];
+    for (const rel of files) {
+        const dest = fromRel(root, rel);
+        if (!fs.existsSync(dest)) added.push(rel);
+        else if (!sameContent(fromRel(from, rel), dest)) changed.push(rel);
+    }
+    const now = new Set(files);
+    const removed = (previous || []).filter((rel) => !now.has(rel) && !isKeptPath(rel) && fs.existsSync(fromRel(root, rel)));
+    return { files, changed, added, removed };
+}
+
+function applyUpdate(from, root, plan) {
+    for (const rel of [...plan.changed, ...plan.added]) {
+        const dest = fromRel(root, rel);
+        if (!isInside(root, dest) || isKeptPath(rel)) continue;
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(fromRel(from, rel), dest);
+    }
+    for (const rel of plan.removed) {
+        const dest = fromRel(root, rel);
+        if (isInside(root, dest) && !isKeptPath(rel)) fs.rmSync(dest, { force: true });
+    }
+    // Finder and Terminal only run files marked as programs.
+    if (!IS_WIN) {
+        for (const rel of plan.files) {
+            if (!/\.(command|sh)$/.test(rel)) continue;
+            try {
+                fs.chmodSync(fromRel(root, rel), 0o755);
+            } catch {
+                /* not there */
+            }
+        }
+    }
+}
+
+function readUpdateState() {
+    try {
+        return JSON.parse(fs.readFileSync(UPDATE_STATE, 'utf8'));
+    } catch {
+        return null;
+    }
+}
+
+async function downloadTo(url, file) {
+    const res = await fetch(url, {
+        headers: { 'User-Agent': 'AMA-Order-System-updater' },
+        signal: AbortSignal.timeout(180_000),
+    });
+    if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+    fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+}
+
+/** Unpack a .zip with what the computer already has (no extra packages). */
+function unzip(zip, dir) {
+    let r;
+    if (IS_MAC) {
+        r = spawnSync('/usr/bin/ditto', ['-x', '-k', zip, dir], { encoding: 'utf8' });
+    } else if (IS_WIN) {
+        const tar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+        const ps = (s) => `'${String(s).replace(/'/g, "''")}'`;
+        r = fs.existsSync(tar)
+            ? spawnSync(tar, ['-xf', zip, '-C', dir], { encoding: 'utf8' })
+            : spawnSync('powershell.exe', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath ${ps(zip)} -DestinationPath ${ps(dir)} -Force`], { encoding: 'utf8' });
+    } else {
+        r = spawnSync('unzip', ['-q', zip, '-d', dir], { encoding: 'utf8' });
+    }
+    if (r.error || r.status !== 0) throw new Error((r.stderr || r.error?.message || 'could not unpack it').trim());
+}
+
+/** The one folder a GitHub ZIP unpacks to - checked to really be this system. */
+function unpackedTop(dir) {
+    const tops = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && e.name !== '__MACOSX');
+    if (tops.length !== 1) throw new Error('the download does not look like the AMA system');
+    const top = path.join(dir, tops[0].name);
+    for (const must of ['scripts/launch.js', 'server/index.js', 'server/package.json', 'client/package.json']) {
+        if (!fs.existsSync(fromRel(top, must))) throw new Error('the download does not look like the AMA system');
+    }
+    return top;
+}
+
+/** A ZIP copy: download, unpack, check and plan - nothing is changed here yet. */
+async function prepareZipUpdate() {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ama-update-'));
+    const cleanup = () => fs.rmSync(tmp, { recursive: true, force: true });
+    try {
+        const zip = path.join(tmp, 'ama.zip');
+        // AMA_UPDATE_ZIP: a .zip already on this computer (used by the tests).
+        if (process.env.AMA_UPDATE_ZIP) {
+            fs.copyFileSync(process.env.AMA_UPDATE_ZIP, zip);
+        } else {
+            step('Downloading the newest version from GitHub...');
+            await downloadTo(UPDATE_ZIP_URL, zip);
+        }
+        const out = path.join(tmp, 'unpacked');
+        fs.mkdirSync(out);
+        unzip(zip, out);
+        const top = unpackedTop(out);
+        const plan = planUpdate(top, ROOT, readUpdateState()?.files || null);
+        if (!plan.changed.length && !plan.added.length && !plan.removed.length) {
+            cleanup();
+            return null;
+        }
+        const counts = [`${plan.changed.length} changed`, `${plan.added.length} new`];
+        if (plan.removed.length) counts.push(`${plan.removed.length} no longer used`);
+        return {
+            summary: [`A newer version is ready (files: ${counts.join(', ')}).`],
+            apply: () => {
+                applyUpdate(top, ROOT, plan);
+                fs.mkdirSync(RUNTIME, { recursive: true });
+                fs.writeFileSync(UPDATE_STATE, JSON.stringify({ updatedAt: new Date().toISOString(), files: plan.files }, null, 1));
+            },
+            cleanup,
+        };
+    } catch (err) {
+        cleanup();
+        stop([`Could not get the newest version: ${err.message}.`, '  Nothing was changed. Check the internet connection and try again.']);
+    }
+}
+
+const git = (args) => spawnSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+
+/** A git copy: fetch and check - nothing is changed here yet. */
+async function prepareGitUpdate() {
+    const version = git(['--version']);
+    if (version.error || version.status !== 0) {
+        stop([
+            'This copy was made with git, but git does not run on this computer.',
+            IS_MAC ? '  Install it by typing in Terminal:  xcode-select --install' : '  Install it from https://git-scm.com',
+            '  Then run Update AMA again. Nothing was changed.',
+        ]);
+    }
+    step('Checking GitHub for a newer version...');
+    const fetched = git(['fetch', '--quiet']);
+    if (fetched.status !== 0) {
+        stop([`Could not reach GitHub: ${(fetched.stderr || '').trim()}`, '  Nothing was changed. Check the internet connection and try again.']);
+    }
+    const up = git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+    if (up.status !== 0) stop('This copy does not follow a branch on GitHub, so it cannot be updated here. Nothing was changed.');
+    const upstream = up.stdout.trim();
+    const count = (range) => Number(git(['rev-list', '--count', range]).stdout.trim()) || 0;
+    const ahead = count(`${upstream}..HEAD`);
+    if (ahead) {
+        stop([`This copy has ${ahead} change(s) of its own that are not on GitHub, so it is left alone.`, '  Nothing was changed.']);
+    }
+    const dirty = git(['status', '--porcelain', '--untracked-files=no']).stdout.trim();
+    if (dirty) {
+        stop([
+            'Some program files in this copy were changed by hand:',
+            ...dirty.split(/\r?\n/).slice(0, 10).map((l) => `    ${l.trim()}`),
+            '  They are left alone, so nothing was changed.',
+        ]);
+    }
+    const behind = count(`HEAD..${upstream}`);
+    if (!behind) return null;
+    const log = git(['log', '--oneline', '--no-decorate', `HEAD..${upstream}`]).stdout.trim().split(/\r?\n/);
+    return {
+        summary: [
+            `A newer version is ready (${behind} change${behind === 1 ? '' : 's'} on GitHub):`,
+            ...log.slice(0, 8).map((l) => `  ${l}`),
+            ...(log.length > 8 ? [`  ... and ${log.length - 8} more`] : []),
+        ],
+        apply: () => {
+            const merged = git(['merge', '--ff-only', '--quiet', upstream]);
+            if (merged.status !== 0) throw new Error((merged.stderr || 'git could not apply it').trim());
+        },
+    };
+}
+
+async function update() {
+    say('\nAMA Order System - update to the newest version\n');
+    checkNode();
+    ensureEnv();
+    const port = serverPort(readEnv());
+
+    const viaGit = fs.existsSync(path.join(ROOT, '.git'));
+    const work = viaGit ? await prepareGitUpdate() : await prepareZipUpdate();
+    if (!work) {
+        good('Already up to date - nothing to change.');
+        return;
+    }
+
+    let wasRunning = false;
+    try {
+        say();
+        for (const line of work.summary) say(`  ${line}`);
+        say();
+        wasRunning = Boolean(await health(port));
+        if (wasRunning) say('  The system is running: it stops for a minute or two while it updates, then starts again.');
+        const answer = await ask('  Update now? (y/n): ');
+        if (answer !== 'y' && answer !== 'yes') stop('Cancelled - nothing was changed.');
+
+        // The data first. Works while the system runs; nothing changes if it fails.
+        if (!fs.existsSync(path.join(SERVER, 'node_modules', '.package-lock.json'))) ensurePackages(SERVER);
+        step('Taking a backup of the data first...');
+        const backup = spawnSync(process.execPath, ['backup-db.js', 'before-update'], { cwd: SERVER, stdio: 'inherit' });
+        if (backup.status !== 0) stop(['Could not take a backup of the data first (see above).', '  Nothing was changed. Is MySQL running?']);
+
+        const pid = readPid();
+        if (wasRunning || (pid && alive(pid))) await stopServer({ quiet: true });
+
+        step('Putting the new version in place...');
+        try {
+            work.apply();
+        } catch (err) {
+            if (wasRunning) {
+                warn(`The update could not be applied (${err.message}). Starting the system again as it was...`);
+                spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'launch.js'), 'start'], { cwd: ROOT, stdio: 'inherit' });
+            }
+            stop(`The update could not be applied: ${err.message}`);
+        }
+        good('Updated. Your settings (server/.env), backups and logs were not touched.');
+    } finally {
+        work.cleanup?.();
+    }
+
+    if (wasRunning) {
+        // The NEW launcher: it updates the packages and rebuilds the web client if needed.
+        say('\n  Starting the updated system...');
+        const started = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'launch.js'), 'start'], { cwd: ROOT, stdio: 'inherit' });
+        if (started.status !== 0) process.exitCode = 1;
+    } else {
+        say('  The system was not running here. Start it with Start AMA when you are ready');
+        say('  (the first start after an update takes a little longer).');
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+const commands = { start, stop: () => stopServer(), restore, autostart, demo, update };
+
+if (require.main === module) {
+    const command = commands[process.argv[2]];
+    if (!command) {
+        console.error('usage: node scripts/launch.js start|stop|restore|autostart|demo|update');
+        process.exit(2);
+    }
+
+    command().catch((err) => {
+        if (err instanceof Stop) {
+            say();
+            say(`  ${err.message}`);
+            say();
+        } else {
+            console.error('\n  Unexpected error:', err);
+        }
+        process.exitCode = 1;
+    });
+}
+
+// For scripts/update.test.js.
+module.exports = { isKeptPath, listFiles, planUpdate, applyUpdate };

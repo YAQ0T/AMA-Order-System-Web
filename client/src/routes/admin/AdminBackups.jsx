@@ -16,6 +16,7 @@ const formatSize = (bytes) => {
 const KIND = {
   manual: T.backupKindManual,
   'before-restore': T.backupKindSafety,
+  'before-update': T.backupKindUpdate,
 };
 
 function Row({ label, children }) {

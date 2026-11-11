@@ -223,6 +223,8 @@ console.log('\nWhich old backups are kept');
   }
   list.push({ name: 'safety-recent', createdAt: at(10, 11), label: 'before-restore' });
   list.push({ name: 'safety-old', createdAt: at(90, 11), label: 'before-restore' });
+  list.push({ name: 'update-recent', createdAt: at(12, 11), label: 'before-update' });
+  list.push({ name: 'update-old', createdAt: at(95, 11), label: 'before-update' });
   const doomed = new Set(backupLib.backupsToDelete(list, { days: 30, now }).map((b) => b.name));
   const kept = list.filter((b) => !doomed.has(b.name));
   ok(!doomed.has('d0h15') && !doomed.has('d0h9') && !doomed.has('d1h15'), 'the newest ones are always kept');
@@ -231,6 +233,7 @@ console.log('\nWhich old backups are kept');
   const months = new Set(kept.filter((b) => b.createdAt < at(30)).map((b) => `${b.createdAt.getFullYear()}-${b.createdAt.getMonth()}`));
   ok(months.size >= 10 && months.size <= 12, 'and one per month for a year', `${months.size} months`);
   ok(!doomed.has('safety-recent') && doomed.has('safety-old'), 'safety copies from a restore are kept for 30 days');
+  ok(!doomed.has('update-recent') && doomed.has('update-old'), '...and so are the ones taken before an update');
   ok(kept.length <= 50, `roughly 30 + 12 files are kept out of ${list.length}`, `${kept.length}`);
 }
 

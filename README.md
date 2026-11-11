@@ -34,6 +34,7 @@ AMA-Order-System-Web/
 | **Autostart AMA (Windows).cmd** / **Autostart AMA (Mac).command** | بيشغّل/بيلغي تشغيل النظام لحاله مع تسجيل الدخول للجهاز |
 | **Cloudflare AMA (Windows).cmd** / **Cloudflare AMA (Mac).command** | الرابط الأونلاين: ربط، تشغيل، إيقاف، فحص كامل، سجل، إزالة، تحديث (قائمة بالأرقام) — بالتفصيل بـ [CLOUDFLARE.md](CLOUDFLARE.md) |
 | **Demo AMA (Windows).cmd** / **Demo AMA (Mac).command** | **نسخة تجريبية** للتجربة بأمان: قاعدة بيانات لحالها، على `http://localhost:6060`، تيليغرام مطفي، فيها حسابات وطلبات جاهزة (الحسابات بتطلع بالشباك). النظام الحقيقي وبياناته ما بيتأثروا. بتوقف لما تسكّر الشباك |
+| **Update AMA (Windows).cmd** / **Update AMA (Mac).command** | **بيحدّث النظام لآخر نسخة على GitHub**: بيقلك شو في جديد وبيسألك، بياخد نسخة احتياطية من البيانات أول، وبيرجّع يشغّل النظام إذا كان شغّال. ملف `server/.env` والنسخ الاحتياطية واللوجز ما بيلمسهم. بيشتغل إذا النسخة منزّلة بـ git أو ZIP |
 
 **الوصول من أي مكان بالعالم** (والنظام على جهاز الشركة): شوف **[ONLINE-ACCESS.md](ONLINE-ACCESS.md)** — رابط https ثابت عن طريق Cloudflare Tunnel، بدون فتح بورتات، وفيه كمان نقل النظام بين الماك والويندوز وإيقاف النظام القديم.
 
@@ -53,6 +54,20 @@ so in plain words and leaves nothing running; a missing database is created.
 **Stop AMA** stops it (by its pid in `.ama_runtime/`, or whatever Node process
 holds the port). The server's output goes to `.ama_runtime/server.log`. Set
 `AMA_NO_BROWSER=1` to skip opening a browser (a screenless server).
+
+**Update AMA** (`scripts/launch.js update`) brings the copy to the newest
+version of the `main` branch on GitHub. A copy made with git gets `git fetch` +
+a fast-forward merge (a copy with commits or hand-edited program files of its
+own is left alone); a copy downloaded as a ZIP gets the newest ZIP, and each
+program file in it replaces the local one if different. It never writes or
+deletes `server/.env` (or any `.env`), `backups/`, logs, `.ama_runtime/`,
+`node_modules/` or `client/dist/`, even if a ZIP contained them; it only
+removes files the previous update brought that the new version dropped
+(`.ama_runtime/update.json`). Order: download and check → show what changed and
+ask → a `before-update` backup of the data (kept 30 days, like the copies taken
+before a restore) → stop the system if it runs → apply → start it again with
+the new launcher, which updates packages and rebuilds the client. Its own
+double-click files run as one block, so it can replace them while they run.
 
 When `APP_URL` is an online link (see ONLINE-ACCESS.md), Start AMA refuses to
 start if that link is already answered by another computer - two copies would
@@ -341,6 +356,8 @@ demand, and downloads any of them.
   while the system is running, refuses a damaged or cut-off file before touching
   anything, asks you to type `RESTORE`, and takes a "before-restore" safety
   backup first — restore that one to undo.
+- *Update AMA* takes a "before-update" backup before it changes anything
+  («قبل التحديث» on the admin page). Both kinds of safety copy are kept 30 days.
 - Backups contain everything, password hashes included. Keep them private.
 - `npm run db:backup` takes one from the command line.
 
@@ -670,7 +687,7 @@ The web client uses the hyphenated key throughout.
 
 | Script | What |
 |---|---|
-| `Start AMA` / `Stop AMA` / `Restore AMA` / `Autostart AMA` | Daily use - see the top of this file (`scripts/launch.js`) |
+| `Start AMA` / `Stop AMA` / `Restore AMA` / `Autostart AMA` / `Update AMA` | Daily use - see the top of this file (`scripts/launch.js`). `node scripts/update.test.js` checks, offline, which files an update may touch |
 | `Demo AMA` | `scripts/launch.js demo`: a separate copy to try things on - database `<DB_NAME>_demo`, port 6060, Telegram off, backups and order log in `.ama_runtime/demo/`; sample accounts (admin / admin123; maker1, maker2, taker1, taker2, acc1, acc2 with demo1234; newbie waiting for approval) and orders in every state, including one waiting for any accountant and one where a taker brought in a helper. Asks whether to start fresh when demo data exists; stops when its window closes |
 | `Cloudflare AMA` | The online link: connect, start, stop, test, log, remove, update cloudflared (`scripts/tunnel.js`; step by step in CLOUDFLARE.md). `node scripts/tunnel.test.js` runs every option on a pretend Mac and Windows PC |
 | `scripts\start-dev.cmd` | Developers: API (real database, Telegram off) + client, each in its own window |

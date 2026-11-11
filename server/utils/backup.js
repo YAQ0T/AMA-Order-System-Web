@@ -108,7 +108,7 @@ function resolveBackup(name, dir = backupDir()) {
  *   - the 5 newest, whatever their age
  *   - the newest of each day, for the last `days` days
  *   - the newest of each month, for the last 12 months
- *   - safety copies made before a restore, for `days` days
+ *   - safety copies made before a restore or an update, for `days` days
  * Everything else goes. With the defaults that is roughly 30 + 12 files.
  */
 function backupsToDelete(backups, { days = keepDays(), now = new Date() } = {}) {
@@ -135,7 +135,7 @@ function backupsToDelete(backups, { days = keepDays(), now = new Date() } = {}) 
             seenMonths.add(monthKey);
             keep.add(b.name);
         }
-        if (b.label === 'before-restore' && d >= dayCutoff) keep.add(b.name);
+        if ((b.label === 'before-restore' || b.label === 'before-update') && d >= dayCutoff) keep.add(b.name);
     }
     return backups.filter((b) => !keep.has(b.name));
 }

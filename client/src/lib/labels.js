@@ -271,6 +271,7 @@ export const T = {
   backupKindAuto: 'تلقائية',
   backupKindManual: 'يدوية',
   backupKindSafety: 'قبل الاسترجاع',
+  backupKindUpdate: 'قبل التحديث',
   backupRestoreTitle: 'استرجاع نسخة',
   backupRestoreBody:
     'أوقف النظام أولاً (Stop AMA)، ثم شغّل «Restore AMA» واختر النسخة. قبل أي تغيير يأخذ الاسترجاع نسخة أمان من البيانات الحالية، فيمكن التراجع عنه.',

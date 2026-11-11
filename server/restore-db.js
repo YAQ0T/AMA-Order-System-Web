@@ -80,7 +80,11 @@ async function chooseFile() {
 
     say(`Backups in ${backup.backupDir()}:\n`);
     list.slice(0, 30).forEach((b, i) => {
-        const kind = b.label === 'manual' ? ' (manual)' : b.label === 'before-restore' ? ' (safety copy before a restore)' : '';
+        const kind = b.label === 'manual'
+            ? ' (manual)'
+            : b.label === 'before-restore'
+                ? ' (safety copy before a restore)'
+                : b.label === 'before-update' ? ' (safety copy before an update)' : '';
         say(`  ${String(i + 1).padStart(2)}. ${when(b.createdAt)}  ${kb(b.size).padStart(8)}${kind}`);
     });
     say();
