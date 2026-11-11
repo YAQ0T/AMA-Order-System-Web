@@ -67,7 +67,6 @@ export const CITIES = [
   'الداخل',
 ];
 
-export const DEFAULT_CITY = 'نابلس';
 
 export const T = {
   appName: 'نظام طلبات AMA',
@@ -305,7 +304,11 @@ export const T = {
   duplicateItem: 'هذا الصنف مكرر',
   atLeastOneItem: 'يجب إضافة صنف واحد على الأقل',
   needTaker: 'اختر مجهّزاً واحداً على الأقل، أو اجعل الطلب مفتوحاً لأي مجهّز',
-  needAccounter: 'اختر محاسباً للطلبات النشطة',
+  needCity: 'اختر المدينة',
+  needCityToast: 'اختر مدينة الطلب قبل الحفظ',
+  needQuantity: 'أدخل الكمية',
+  needQuantityToast: (name) => `أدخل كمية الصنف «${name}»`,
+  totalLeavesOutUnavailable: 'لا يشمل الأصناف غير المتوفرة',
 
   // Order marks
   onlineOrder: 'طلب أونلاين',
@@ -328,6 +331,31 @@ export const T = {
   orderTaken: 'الطلب لك الآن — تجده في «طلباتي»',
   orderAlreadyTaken: 'سبقك مجهّز آخر وأخذ هذا الطلب',
   noOpenOrders: 'لا توجد طلبات مفتوحة حالياً',
+
+  // Helpers - a taker on an order brings other takers in
+  addHelpers: 'إضافة مجهّزين',
+  addHelpersTitle: (id) => `مجهّزون يساعدونك في الطلب #${id}`,
+  addHelpersHint: 'المجهّز اللي بتضيفه بيصير معك على الطلب: بيشوفه بـ«طلباتي» وبيقدر يعلّم الأصناف ويعدّل ويضيف وينهي الطلب.',
+  noOtherTakers: 'كل المجهّزين على هذا الطلب أصلاً',
+  helpersAdded: 'تمت إضافتهم — وصلهم إشعار',
+
+  // Accountants take completed orders - the first one gets it
+  availableForAccounting: 'جاهزة للمحاسبة',
+  availableForAccountingHint: 'طلبات اكتملت ولم يأخذها محاسب بعد. أول محاسب يأخذ الطلب يصبح له ويختفي من عند الباقين.',
+  myAccountingOrders: 'طلباتي',
+  takeForAccounting: 'خذ الطلب',
+  takeForAccountingConfirm: (id) => `أخذ الطلب #${id}؟ سيصبح لك ويختفي من عند باقي المحاسبين.`,
+  takenForAccounting: 'الطلب لك الآن — تجده في «طلباتي»',
+  alreadyTakenByAccountant: 'سبقك محاسب آخر وأخذ هذا الطلب',
+  noAvailableForAccounting: 'لا توجد طلبات جاهزة حالياً',
+  awaitingAccountant: 'بانتظار محاسب',
+
+  // Sending a finished order back to its takers
+  reopenNote: 'الطلب مكتمل. إذا غيّرت الأصناف أو الكميات، بيرجع لنفس المجهّزين يجهّزوه من جديد (الأصناف اللي تغيّرت بترجع بدون علامة). تعديل الأسعار بس ما بيرجّعه.',
+  erpEditNote:
+    'الطلب مُدخل على ERP. أي تعديل بينحفظ بسجل الطلب، وبيوصل إشعار للمحاسب اللي أدخله حتى يعدّل ERP. وإذا غيّرت الأصناف أو الكميات بيرجع لنفس المجهّزين يجهّزوه من جديد.',
+  sentBackToTakers: 'رجع الطلب للمجهّزين',
+  savedAccountantTold: 'تم الحفظ — وصل إشعار للمحاسب',
 
   // Keyboard hints
   shortcutCreate: 'Ctrl+Enter',

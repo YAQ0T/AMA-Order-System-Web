@@ -118,8 +118,10 @@ console.log('Creating');
   ok(r.status === 400 && /at least one taker/.test(r.data?.error), 'no taker and not open -> still refused (a forgotten taker is not an open order)', `${r.status}`);
   r = await create({ openToAll: true, assignedTakerIds: [uid('taker1')] });
   ok(r.status === 400 && /cannot also be assigned/.test(r.data?.error), 'open AND assigned -> refused', `${r.status}`);
-  r = await create({ openToAll: true, assignedTakerIds: [], accounterId: null });
-  ok(r.status === 400 && /accounter/.test(r.data?.error), 'an open order still needs an accountant', `${r.status}`);
+  // (taker3 has no Telegram, so this order sends nothing the checks below count.)
+  r = await create({ assignedTakerIds: [uid('taker3')], accounterId: null });
+  ok(r.status === 201 && r.data?.accounterId === null, 'no accountant is chosen any more (they take the order once it is completed)', `${r.status}`);
+  if (r.status === 201) await call('DELETE', `/api/orders/${r.data.id}`, { token: maker });
   r = await create({ assignedTakerIds: [uid('maker1')] });
   ok(r.status === 400 && r.data?.error === 'Invalid taker selection', 'assigning a maker as a "taker" -> refused', `${r.status} ${r.data?.error}`);
   r = await create({ assignedTakerIds: [99999] });

@@ -1,15 +1,16 @@
 import { useCallback, useRef, useState } from 'react';
 
-import { T, CITIES, DEFAULT_CITY } from '../lib/labels';
+import { T, CITIES } from '../lib/labels';
 import { parseNumber } from '../lib/format';
 import { useShortcuts } from '../lib/shortcuts';
-import { useTakers, useAccounters } from '../hooks/useUsers';
+import { useTakers } from '../hooks/useUsers';
 import { useCreateOrder } from '../hooks/useOrders';
 import { useToast } from './Toast';
 import ItemNameInput from './ItemNameInput';
 import { Spinner } from './ui';
 
-const emptyItem = () => ({ key: Math.random().toString(36).slice(2), name: '', quantity: '1', price: '' });
+// Quantity starts empty: a quantity of 1 filled in for you is too easy to miss.
+const emptyItem = () => ({ key: Math.random().toString(36).slice(2), name: '', quantity: '', price: '' });
 
 /**
  * Names created in this session, suggested before they exist server-side.
@@ -26,19 +27,18 @@ export default function OrderForm({ admin = false }) {
   const toast = useToast();
   const createOrder = useCreateOrder();
   const { data: takers = [], isLoading: takersLoading } = useTakers();
-  const { data: accounters = [], isLoading: accountersLoading } = useAccounters();
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [isOnline, setIsOnline] = useState(false);
-  const [city, setCity] = useState(DEFAULT_CITY);
+  // No city by default: forgetting it must be noticed, not silently become Nablus.
+  const [city, setCity] = useState('');
   const [items, setItems] = useState([emptyItem()]);
   const [takerIds, setTakerIds] = useState([]);
   // Left for any taker instead of assigned. On by default: most orders go to
   // whoever is free. Untick it to pick takers by name for this one order -
   // reset() turns it back on for the next.
   const [openToAll, setOpenToAll] = useState(true);
-  const [accounterId, setAccounterId] = useState('');
   const [errors, setErrors] = useState({});
 
   const formRef = useRef(null);
@@ -77,36 +77,52 @@ export default function OrderForm({ admin = false }) {
     setTitle('');
     setDescription('');
     setIsOnline(false);
-    setCity(DEFAULT_CITY);
+    setCity('');
     setItems([emptyItem()]);
     setTakerIds([]);
     setOpenToAll(true);
-    setAccounterId('');
     setErrors({});
     requestAnimationFrame(() => {
       formRef.current?.querySelector('input[name="title"]')?.focus();
     });
   };
 
+  /**
+   * Returns { valid, cleaned, message }: `message` names the first problem, so
+   * the toast says exactly what to fix ("choose the city", "enter the
+   * quantity of X") rather than a general "fix the fields in red".
+   */
   const validate = (archive) => {
     const next = {};
+    let message = null;
 
-    if (!city.trim()) next.city = T.required;
+    // Every order needs its city - drafts too, so sending one out later
+    // never stops on it.
+    if (!city.trim()) {
+      next.city = T.needCity;
+      message = T.needCityToast;
+    }
 
     const cleaned = [];
     const seen = new Set();
 
     for (const item of items) {
       const name = item.name.trim();
+      const quantityText = String(item.quantity).trim();
       const qty = parseNumber(item.quantity);
       const hasPrice = String(item.price).trim() !== '';
       const price = hasPrice ? parseNumber(item.price) : null;
 
       // Skip rows the user left completely blank.
-      if (!name && String(item.quantity).trim() === '') continue;
+      if (!name && quantityText === '' && !hasPrice) continue;
 
       if (!name) {
         next[`item:${item.key}:name`] = T.required;
+        continue;
+      }
+      if (quantityText === '') {
+        next[`item:${item.key}:quantity`] = T.needQuantity;
+        message ??= T.needQuantityToast(name);
         continue;
       }
       if (qty === null || qty <= 0) {
@@ -125,26 +141,23 @@ export default function OrderForm({ admin = false }) {
       cleaned.push({ name, quantity: qty, price });
     }
 
-    if (cleaned.length === 0) next.items = T.atLeastOneItem;
+    if (cleaned.length === 0 && !Object.keys(next).some((k) => k.startsWith('item:'))) next.items = T.atLeastOneItem;
 
-    // Archived orders are drafts - no assignment required yet. Active orders
-    // need an accountant and a taker (or to be open to any taker), and the
-    // server rejects them otherwise (routes/orders.js).
-    if (!archive) {
-      if (!openToAll && takerIds.length === 0) next.takers = T.needTaker;
-      if (!accounterId) next.accounter = T.needAccounter;
-    }
+    // Archived orders are drafts - no taker yet. An active order needs a taker
+    // or to be open to any taker (the server refuses it otherwise). Nobody
+    // picks an accountant: they take the order once it is completed.
+    if (!archive && !openToAll && takerIds.length === 0) next.takers = T.needTaker;
 
     setErrors(next);
-    return { valid: Object.keys(next).length === 0, cleaned };
+    return { valid: Object.keys(next).length === 0, cleaned, message };
   };
 
   const submit = async (archive) => {
     if (createOrder.isPending) return;
 
-    const { valid, cleaned } = validate(archive);
+    const { valid, cleaned, message } = validate(archive);
     if (!valid) {
-      toast.error(T.fixErrors);
+      toast.error(message || T.fixErrors);
       return;
     }
 
@@ -155,7 +168,6 @@ export default function OrderForm({ admin = false }) {
         city: city.trim(),
         items: cleaned,
         assignedTakerIds: archive || openToAll ? [] : takerIds,
-        accounterId: archive ? null : Number(accounterId),
         ...(archive ? { status: 'archived' } : {}),
         ...(!archive && openToAll ? { openToAll: true } : {}),
         ...(isOnline ? { isOnline: true } : {}),
@@ -377,7 +389,7 @@ export default function OrderForm({ admin = false }) {
         </button>
       </fieldset>
 
-      <div className="mb-4 grid gap-4 sm:grid-cols-2">
+      <div className="mb-4">
         <div>
           <span className="label">{T.assignTakers}</span>
           <label className="mb-2 flex w-fit cursor-pointer items-center gap-2 text-sm font-bold">
@@ -426,29 +438,6 @@ export default function OrderForm({ admin = false }) {
           {errors.takers && <p className="mt-1 text-xs font-bold text-red-600">{errors.takers}</p>}
         </div>
 
-        <div>
-          <label className="label" htmlFor="order-accounter">
-            {T.accounter}
-          </label>
-          {accountersLoading ? (
-            <Spinner className="h-4 w-4" />
-          ) : (
-            <select
-              id="order-accounter"
-              className="input"
-              value={accounterId}
-              onChange={(e) => setAccounterId(e.target.value)}
-            >
-              <option value="">{T.selectAccounter}</option>
-              {accounters.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.username}
-                </option>
-              ))}
-            </select>
-          )}
-          {errors.accounter && <p className="mt-1 text-xs font-bold text-red-600">{errors.accounter}</p>}
-        </div>
       </div>
 
       <div className="flex flex-wrap gap-2">

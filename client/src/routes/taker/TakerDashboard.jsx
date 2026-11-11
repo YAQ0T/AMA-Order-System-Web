@@ -12,8 +12,11 @@ import {
   useUpdateItemStatus,
   useOpenOrdersQuery,
   useClaimOrder,
+  useSetItemQuantity,
+  useAddOrderItem,
+  useAddHelpers,
 } from '../../hooks/useOrders';
-import * as ordersApi from '../../api/orders';
+import { useTakers } from '../../hooks/useUsers';
 import { T } from '../../lib/labels';
 import { parseNumber, formatQuantity } from '../../lib/format';
 import ItemNameInput from '../../components/ItemNameInput';
@@ -33,9 +36,9 @@ const NEXT_STATUS = {
 
 function AddItemModal({ order, open, onClose }) {
   const toast = useToast();
-  const updateOrder = useUpdateOrder();
+  const addItem = useAddOrderItem();
   const [name, setName] = useState('');
-  const [quantity, setQuantity] = useState('1');
+  const [quantity, setQuantity] = useState('');
   const [error, setError] = useState(null);
 
   const submit = async (e) => {
@@ -46,6 +49,7 @@ function AddItemModal({ order, open, onClose }) {
     const qty = parseNumber(quantity);
 
     if (!trimmed) return setError(T.required);
+    if (quantity.trim() === '') return setError(T.needQuantity);
     if (qty === null || qty <= 0) return setError(T.invalidQuantity);
 
     const exists = (order.Items || []).some(
@@ -54,18 +58,12 @@ function AddItemModal({ order, open, onClose }) {
     if (exists) return setError(T.duplicateItem);
 
     try {
-      await updateOrder.mutateAsync({
-        id: order.id,
-        payload: {
-          items: [
-            ...ordersApi.itemsPayload(order.Items),
-            { name: trimmed, quantity: qty, price: null, status: null },
-          ],
-        },
-      });
+      // Only this item is sent: the rest of the order is not touched, so
+      // nothing another taker changed meanwhile can be undone by it.
+      await addItem.mutateAsync({ orderId: order.id, name: trimmed, quantity: qty });
       toast.success(T.itemAdded);
       setName('');
-      setQuantity('1');
+      setQuantity('');
       onClose();
     } catch (err) {
       setError(err?.message || T.somethingWentWrong);
@@ -102,8 +100,8 @@ function AddItemModal({ order, open, onClose }) {
           <button type="button" className="btn-secondary" onClick={onClose}>
             {T.cancel}
           </button>
-          <button type="submit" className="btn-primary" disabled={updateOrder.isPending}>
-            {updateOrder.isPending ? <Spinner className="h-4 w-4" /> : null}
+          <button type="submit" className="btn-primary" disabled={addItem.isPending}>
+            {addItem.isPending ? <Spinner className="h-4 w-4" /> : null}
             {T.save}
           </button>
         </div>
@@ -114,7 +112,7 @@ function AddItemModal({ order, open, onClose }) {
 
 function EditItemModal({ order, item, open, onClose }) {
   const toast = useToast();
-  const updateOrder = useUpdateOrder();
+  const setItemQuantity = useSetItemQuantity();
   const [quantity, setQuantity] = useState('');
   const [error, setError] = useState(null);
 
@@ -130,20 +128,15 @@ function EditItemModal({ order, item, open, onClose }) {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (quantity.trim() === '') return setError(T.needQuantity);
     const qty = parseNumber(quantity);
     if (qty === null || qty <= 0) return setError(T.invalidQuantity);
 
     try {
-      await updateOrder.mutateAsync({
-        id: order.id,
-        payload: {
-          // Match by name: item ids rotate on every save (destroy + bulkCreate
-          // in routes/orders.js), so a held id is routinely stale.
-          items: ordersApi.itemsPayload(
-            (order.Items || []).map((i) => (i.name === item.name ? { ...i, quantity: qty } : i))
-          ),
-        },
-      });
+      // Only this item's quantity is sent (by name - ids rotate when the
+      // maker saves the order). It used to send the whole list as this screen
+      // last showed it, which could write old quantities back over new ones.
+      await setItemQuantity.mutateAsync({ orderId: order.id, name: item.name, quantity: qty });
       toast.success(T.saved);
       onClose();
     } catch (err) {
@@ -174,8 +167,87 @@ function EditItemModal({ order, item, open, onClose }) {
           <button type="button" className="btn-secondary" onClick={onClose}>
             {T.cancel}
           </button>
-          <button type="submit" className="btn-primary" disabled={updateOrder.isPending}>
+          <button type="submit" className="btn-primary" disabled={setItemQuantity.isPending}>
+            {setItemQuantity.isPending ? <Spinner className="h-4 w-4" /> : null}
             {T.save}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/**
+ * Bring other takers in to help with an order. They get the order under
+ * «طلباتي» with everything this taker can do on it (server: POST
+ * /api/orders/:id/helpers). Taking someone off an order is the maker's call.
+ */
+function HelpersModal({ order, open, onClose }) {
+  const toast = useToast();
+  const addHelpers = useAddHelpers();
+  const { data: takers = [], isLoading } = useTakers(open);
+  const [picked, setPicked] = useState([]);
+  const [error, setError] = useState(null);
+
+  if (!order) return null;
+  const onOrder = new Set((order.AssignedTakers || []).map((t) => t.id));
+  const candidates = takers.filter((t) => !onOrder.has(t.id));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    if (!picked.length) return setError(T.required);
+    try {
+      await addHelpers.mutateAsync({ orderId: order.id, takerIds: picked });
+      toast.success(T.helpersAdded);
+      setPicked([]);
+      onClose();
+    } catch (err) {
+      setError(err?.message || T.somethingWentWrong);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={T.addHelpersTitle(order.id)}>
+      <form onSubmit={submit} className="flex flex-col gap-3">
+        <p className="text-sm text-slate-600 dark:text-ink-400">{T.addHelpersHint}</p>
+        {isLoading ? (
+          <Spinner className="h-5 w-5" />
+        ) : candidates.length === 0 ? (
+          <p className="text-sm font-bold text-slate-500">{T.noOtherTakers}</p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {candidates.map((taker) => {
+              const selected = picked.includes(taker.id);
+              return (
+                <button
+                  key={taker.id}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => setPicked((c) => (c.includes(taker.id) ? c.filter((t) => t !== taker.id) : [...c, taker.id]))}
+                  className={[
+                    'rounded-lg border px-3 py-1.5 text-sm font-bold transition',
+                    selected
+                      ? 'border-brand-500 bg-brand-500 text-white dark:border-indigo dark:bg-indigo'
+                      : 'border-slate-300 bg-white text-slate-700 dark:border-slate-600 dark:bg-ink-900 dark:text-ink-50',
+                  ].join(' ')}
+                >
+                  {taker.username}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {error && <p className="text-sm font-bold text-red-600">{error}</p>}
+
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn-secondary" onClick={onClose}>
+            {T.cancel}
+          </button>
+          <button type="submit" className="btn-primary" disabled={addHelpers.isPending || candidates.length === 0}>
+            {addHelpers.isPending ? <Spinner className="h-4 w-4" /> : null}
+            {T.addHelpers}
           </button>
         </div>
       </form>
@@ -192,6 +264,7 @@ function TakerMyOrders({ openCount }) {
   const [addingTo, setAddingTo] = useState(null);
   const [editingItem, setEditingItem] = useState(null);
   const [advancing, setAdvancing] = useState(null);
+  const [helpingWith, setHelpingWith] = useState(null);
   // Keyed by item NAME, because ids rotate on every save (see useUpdateItemStatus).
   const [busyItems, setBusyItems] = useState(() => new Set());
 
@@ -288,13 +361,18 @@ function TakerMyOrders({ openCount }) {
         onItemAdd={setAddingTo}
         extraActions={(order) =>
           NEXT_STATUS[order.status] ? (
-            <button
-              type="button"
-              className="btn-primary text-xs"
-              onClick={() => setAdvancing(order)}
-            >
-              {order.status === 'pending' ? T.statusStart : T.statusFinish}
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn-primary text-xs"
+                onClick={() => setAdvancing(order)}
+              >
+                {order.status === 'pending' ? T.statusStart : T.statusFinish}
+              </button>
+              <button type="button" className="btn-secondary text-xs" onClick={() => setHelpingWith(order)}>
+                {T.addHelpers}
+              </button>
+            </>
           ) : null
         }
       />
@@ -308,6 +386,13 @@ function TakerMyOrders({ openCount }) {
         item={editingItem?.item}
         open={Boolean(editingItem)}
         onClose={() => setEditingItem(null)}
+      />
+
+      <HelpersModal
+        key={helpingWith?.id ?? 'none'}
+        order={helpingWith}
+        open={Boolean(helpingWith)}
+        onClose={() => setHelpingWith(null)}
       />
 
       <ConfirmDialog

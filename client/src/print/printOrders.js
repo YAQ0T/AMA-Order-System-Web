@@ -1,5 +1,14 @@
 import { statusLabel, T, CURRENCY } from '../lib/labels';
-import { formatDateTime, formatQuantity, lineTotal, orderTitle, orderDescription } from '../lib/format';
+import {
+  formatDateTime,
+  formatQuantity,
+  lineTotal,
+  orderTitle,
+  orderDescription,
+  orderTotal,
+  totalLeavesOutItems,
+  hasPrices,
+} from '../lib/format';
 
 /**
  * Printing is done by the browser, not by a JS PDF library.
@@ -43,7 +52,7 @@ function itemRows(order, showPrices) {
           <td class="name">${escapeHtml(item.name)}</td>
           <td class="num"><span dir="ltr">${escapeHtml(formatQuantity(item.quantity))}</span></td>
           ${showPrices ? `<td class="num"><span dir="ltr">${item.price == null ? '—' : money(item.price)}</span></td>` : ''}
-          ${showPrices ? `<td class="num"><span dir="ltr">${money(lineTotal(item))}</span></td>` : ''}
+          ${showPrices ? `<td class="num line-total"><span dir="ltr">${money(lineTotal(item))}</span></td>` : ''}
           <td class="status">${statusText}</td>
         </tr>`;
     })
@@ -51,8 +60,8 @@ function itemRows(order, showPrices) {
 }
 
 function orderPage(order, { showPrices, isLast }) {
-  const items = order.Items || [];
-  const total = items.reduce((sum, item) => sum + lineTotal(item), 0);
+  // Unavailable items did not go out: not in the total (same as on screen).
+  const total = orderTotal(order);
   const takers = (order.AssignedTakers || []).map((t) => t.username).join('، ');
 
   return `
@@ -89,11 +98,15 @@ function orderPage(order, { showPrices, isLast }) {
         </thead>
         <tbody>${itemRows(order, showPrices)}</tbody>
         ${
-          showPrices && total > 0
+          showPrices && hasPrices(order)
             ? `<tfoot>
                  <tr>
                    <td colspan="${3}" class="total-label">${escapeHtml(T.grandTotal)}</td>
-                   <td colspan="2" class="num total-value"><span dir="ltr">${CURRENCY} ${money(total)}</span></td>
+                   <td colspan="2" class="num total-value"><span dir="ltr">${CURRENCY} ${money(total)}</span>${
+                     totalLeavesOutItems(order)
+                       ? `<div class="total-note">${escapeHtml(T.totalLeavesOutUnavailable)}</div>`
+                       : ''
+                   }</td>
                    <td></td>
                  </tr>
                </tfoot>`
@@ -183,7 +196,9 @@ const PRINT_CSS = `
 
   /* Keep the strike/tint legible on mono printers too. */
   .row-unavailable { background: #fdeaea; }
-  .row-unavailable .name { text-decoration: line-through; }
+  .row-unavailable .name,
+  .row-unavailable .line-total { text-decoration: line-through; }
+  .total-note { font-size: 10px; font-weight: 400; color: #555; }
   .row-collected { background: #eafaf0; }
 
   .total-label { text-align: left; font-weight: 700; background: #f0f0f0; }

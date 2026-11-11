@@ -7,6 +7,7 @@
  *   "Stop AMA (Windows).cmd"    / "Stop AMA (Mac).command"     -> node scripts/launch.js stop
  *   "Restore AMA (Windows).cmd" / "Restore AMA (Mac).command"  -> node scripts/launch.js restore
  *   "Autostart AMA (Windows).cmd" / "Autostart AMA (Mac).command" -> node scripts/launch.js autostart
+ *   "Demo AMA (Windows).cmd"    / "Demo AMA (Mac).command"     -> node scripts/launch.js demo
  *
  * start: checks Node, creates server/.env if missing, installs packages and
  * builds the web client when needed, starts the server in the background,
@@ -16,6 +17,9 @@
  * backup, type RESTORE; a safety backup is taken first), then offers to start.
  * autostart: turns "start the system when I log in" on or off (a Mac login
  * item, or a file in the Windows Startup folder - see the bottom of this file).
+ * demo ("Demo AMA"): a separate copy to try things on - its own database,
+ * port 6060, Telegram off, sample accounts and orders; it stops when its
+ * window closes. The real system and its data are never touched.
  *
  * The server keeps running after the window is closed. Its output goes to
  * .ama_runtime/server.log, and its process id to .ama_runtime/server.pid -
@@ -587,6 +591,248 @@ async function restore() {
 }
 
 // ---------------------------------------------------------------------------
+// Demo: a separate copy to try things on (behind "Demo AMA").
+//
+// Its own database (<DB_NAME>_demo), its own port (6060), Telegram off, and
+// its backups and order log under .ama_runtime/demo - so nothing done in it
+// reaches the real system, the real data or anyone's phone. It runs while
+// its window is open: closing the window (or Ctrl+C) stops it. Each start
+// can begin with fresh sample data: accounts for every role and orders in
+// every state.
+
+const DEMO_PORT = 6060;
+const DEMO_PASSWORD = 'demo1234';
+const DEMO_DIR = path.join(RUNTIME, 'demo');
+
+async function demo() {
+    say('\nAMA Order System - DEMO (a separate copy to try things on)\n');
+    checkNode();
+    const env = ensureEnv();
+    const database = `${env.DB_NAME || 'ama_order_system'}_demo`;
+    if (!/^[A-Za-z0-9_$]+$/.test(database)) stop('DB_NAME in server/.env has unexpected characters.');
+    if (await health(DEMO_PORT)) {
+        good(`The demo is already running: http://localhost:${DEMO_PORT}`);
+        openBrowser(`http://localhost:${DEMO_PORT}`);
+        return;
+    }
+    if (listenersOn(DEMO_PORT).length) stop(`Port ${DEMO_PORT} is in use by another program - close it and try again.`);
+
+    ensurePackages(SERVER);
+    ensurePackages(CLIENT);
+    ensureClientBuild();
+
+    // The demo database: new sample data, or what the last demo left.
+    const mysql = require(path.join(SERVER, 'node_modules', 'mysql2', 'promise'));
+    let conn;
+    try {
+        conn = await mysql.createConnection({
+            host: env.DB_HOST || 'localhost',
+            port: Number(env.DB_PORT) || 3306,
+            user: env.DB_USER,
+            password: env.DB_PASSWORD,
+        });
+    } catch (err) {
+        stop(DB_ADVICE[err.code] || `Cannot reach MySQL (${err.code || err.message}).`);
+    }
+    let fresh;
+    try {
+        const [rows] = await conn.query('SELECT 1 FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [database]);
+        fresh = rows.length === 0;
+        if (!fresh) {
+            const answer = await ask('  The demo data from last time is still there. Start again with fresh sample data? (y/n, Enter = keep it): ');
+            fresh = answer === 'y' || answer === 'yes';
+        }
+        if (fresh) {
+            await conn.query(`DROP DATABASE IF EXISTS \`${database}\``);
+            await conn.query(`CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+        }
+    } finally {
+        await conn.end();
+    }
+
+    fs.mkdirSync(DEMO_DIR, { recursive: true });
+    const logFile = path.join(DEMO_DIR, 'server.log');
+    const log = fs.openSync(logFile, 'w');
+    step('Starting the demo server...');
+    const child = spawn(process.execPath, ['index.js'], {
+        cwd: SERVER,
+        stdio: ['ignore', log, log],
+        // Real settings from server/.env (the MySQL login), with everything
+        // that could reach outside this demo switched off or moved aside.
+        env: {
+            ...process.env,
+            DB_NAME: database,
+            PORT: String(DEMO_PORT),
+            TELEGRAM: 'off',
+            TELEGRAM_BOT_TOKEN: '',
+            BACKUP_AUTO: 'off',
+            BACKUP_DIR: path.join(DEMO_DIR, 'backups'),
+            BACKUP_COPY_DIR: '',
+            ORDER_LOG_DIR: path.join(DEMO_DIR, 'logs'),
+            APP_URL: '',
+            DB_ALTER: '',
+        },
+    });
+    let exited = false;
+    const done = new Promise((resolve) => child.on('exit', (code) => {
+        exited = true;
+        resolve(code);
+    }));
+    const stopDemo = () => {
+        if (!exited) child.kill();
+    };
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, stopDemo);
+
+    const deadline = Date.now() + START_TIMEOUT_MS;
+    let state = null;
+    while (Date.now() < deadline && !exited) {
+        state = await health(DEMO_PORT);
+        if (state && state.db !== 'starting') break;
+        await sleep(500);
+    }
+    if (exited || state?.db !== 'ready') {
+        stopDemo();
+        const lines = fs.readFileSync(logFile, 'utf8').trim().split(/\r?\n/).slice(-20);
+        say();
+        for (const line of lines) say(`  ${line}`);
+        stop((state?.dbCode && DB_ADVICE[state.dbCode]) || 'The demo server did not start - the reason is in the lines above.');
+    }
+
+    if (fresh) {
+        step('Adding sample accounts and orders...');
+        try {
+            await seedDemo(`http://127.0.0.1:${DEMO_PORT}`);
+        } catch (err) {
+            warn(`Some sample data could not be added (${err.message}). The demo works anyway.`);
+        }
+    }
+
+    const ips = lanAddresses();
+    say();
+    say('  ==================================================================');
+    say('   DEMO RUNNING - a separate copy: try anything, nothing real changes');
+    say('  ==================================================================');
+    say(`   On this computer:        http://localhost:${DEMO_PORT}`);
+    for (const ip of ips) say(`   On phones (same Wi-Fi):  http://${ip}:${DEMO_PORT}`);
+    say();
+    say(`   Accounts - password ${DEMO_PASSWORD} for all, except admin (admin123):`);
+    say('     admin    the admin: sees everything; its orders are urgent (red)');
+    say('     maker1   a maker: 4 orders - online and open to all, one for taker1,');
+    say('              one completed (waiting for an accountant), one draft');
+    say('     maker2   another maker: 2 orders - and cannot see maker1\'s');
+    say('     taker1   a taker: 1 order of their own, helps taker2 with another,');
+    say('              takes the open ones');
+    say('     taker2   a taker: 1 order in progress (taker1 helps)');
+    say('     acc1     an accountant: 1 order taken, to send to ERP');
+    say('     acc2     another accountant: takes completed orders too - first one wins');
+    say('     newbie   just signed up - waits for the admin\'s approval');
+    say();
+    say('   Telegram is off here, and the real system, its data and backups');
+    say(`   are not touched. Demo data: MySQL database ${database}.`);
+    say('   To stop the demo: close this window, or press Ctrl+C.');
+    say('  ==================================================================');
+    openBrowser(`http://localhost:${DEMO_PORT}`);
+
+    const code = await done;
+    say(code === 0 || code === null ? '\n  Demo stopped.' : `\n  The demo server stopped (code ${code}) - see .ama_runtime/demo/server.log`);
+}
+
+/** Sample accounts and orders, made through the API like the app would. */
+async function seedDemo(base) {
+    const call = async (method, route, body, token) => {
+        const res = await fetch(base + route, {
+            method,
+            headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+            body: body ? JSON.stringify(body) : undefined,
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(`${method} ${route}: ${res.status} ${data?.error || ''}`.trim());
+        return data;
+    };
+    const login = async (username, password = DEMO_PASSWORD) => (await call('POST', '/api/auth/login', { username, password })).token;
+
+    const people = [['maker1', 'maker'], ['maker2', 'maker'], ['taker1', 'taker'], ['taker2', 'taker'], ['acc1', 'accounter'], ['acc2', 'accounter'], ['newbie', 'taker']];
+    for (const [username, role] of people) await call('POST', '/api/auth/register', { username, password: DEMO_PASSWORD, role });
+    const admin = await login('admin', 'admin123');
+    for (const u of await call('GET', '/api/admin/users/pending', null, admin)) {
+        if (u.username !== 'newbie') await call('PUT', `/api/admin/users/${u.id}/approve`, {}, admin);
+    }
+    const users = await call('GET', '/api/admin/users', null, admin);
+    const id = (name) => users.find((u) => u.username === name).id;
+    const [maker1, maker2, taker1, taker2, acc1] = [await login('maker1'), await login('maker2'), await login('taker1'), await login('taker2'), await login('acc1')];
+    // No accountant is picked: accountants take orders once they are completed.
+    const order = (token, body) => call('POST', '/api/orders', body, token);
+    const tick = (orderId, name, status, token) => call('PATCH', `/api/orders/${orderId}/items/status`, { name, status }, token);
+    const move = (orderId, status, token) => call('PUT', `/api/orders/${orderId}`, { status }, token);
+
+    await order(maker1, {
+        title: 'سوبرماركت النور', city: 'نابلس', isOnline: true, openToAll: true,
+        items: [
+            { name: 'طحينة نابلسية ممتازة عبوة كبيرة', quantity: 3, price: 12.5 },
+            { name: 'زيت زيتون بكر 1 لتر', quantity: 2, price: 38 },
+            { name: 'سكر أبيض 1 كغم', quantity: 10, price: 4.5 },
+        ],
+    });
+    await order(admin, {
+        title: 'مطعم الريّان', city: 'رامالله', openToAll: true, description: 'لازم يوصل قبل الساعة 12 الظهر',
+        items: [
+            { name: 'حلاوة بالفستق الحلبي', quantity: 4, price: 22 },
+            { name: 'رز بسمتي 5 كغم', quantity: 2, price: 45 },
+        ],
+    });
+    await order(maker1, {
+        title: 'بقالة الأمل', city: 'جنين', assignedTakerIds: [id('taker1')],
+        items: [
+            { name: 'شاي أخضر', quantity: 6, price: 9 },
+            { name: 'قهوة عربية بالهيل', quantity: 3, price: 30 },
+        ],
+    });
+    const inProgress = await order(maker2, {
+        title: 'ماركت أبو خالد', city: 'الخليل', assignedTakerIds: [id('taker2')],
+        items: [
+            { name: 'عدس أحمر 1 كغم', quantity: 5, price: 7 },
+            { name: 'حمص حب 1 كغم', quantity: 5, price: 8 },
+            { name: 'فريكة', quantity: 2, price: 15 },
+        ],
+    });
+    await move(inProgress.id, 'in-progress', taker2);
+    await tick(inProgress.id, 'عدس أحمر 1 كغم', 'collected', taker2);
+    // taker2 brings taker1 in to help with it.
+    await call('POST', `/api/orders/${inProgress.id}/helpers`, { takerIds: [id('taker1')] }, taker2);
+    // Completed, and already taken by acc1 (in acc1's own list, to send to ERP).
+    const taken = await order(maker2, {
+        title: 'مخبز السلام', city: 'قلقيليا', assignedTakerIds: [id('taker2')],
+        items: [
+            { name: 'طحين أبيض 25 كغم', quantity: 2, price: 60 },
+            { name: 'خميرة فورية', quantity: 10, price: 3 },
+        ],
+    });
+    await move(taken.id, 'in-progress', taker2);
+    await tick(taken.id, 'طحين أبيض 25 كغم', 'collected', taker2);
+    await tick(taken.id, 'خميرة فورية', 'collected', taker2);
+    await move(taken.id, 'completed', taker2);
+    await call('POST', `/api/orders/${taken.id}/accounting-claim`, null, acc1);
+    // Completed and not taken yet: waiting under «جاهزة للمحاسبة» for any accountant.
+    const completed = await order(maker1, {
+        title: 'محمص الشام', city: 'طولكرم', assignedTakerIds: [id('taker1')],
+        items: [
+            { name: 'لوز محمص', quantity: 2, price: 40 },
+            { name: 'كاجو', quantity: 1, price: 55 },
+            { name: 'بزر بطيخ', quantity: 3, price: 18 },
+        ],
+    });
+    await move(completed.id, 'in-progress', taker1);
+    await tick(completed.id, 'لوز محمص', 'collected', taker1);
+    await tick(completed.id, 'كاجو', 'unavailable', taker1);
+    await tick(completed.id, 'بزر بطيخ', 'collected', taker1);
+    await move(completed.id, 'completed', taker1);
+    await order(maker1, {
+        title: 'زبون جديد (مسودة)', city: 'بيت لحم', status: 'archived',
+        items: [{ name: 'معكرونة', quantity: 12, price: 3.5 }],
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Starting automatically
 //
 // Mac: a login item (LaunchAgent) in ~/Library/LaunchAgents.
@@ -683,10 +929,10 @@ async function autostart() {
 
 // ---------------------------------------------------------------------------
 
-const commands = { start, stop: () => stopServer(), restore, autostart };
+const commands = { start, stop: () => stopServer(), restore, autostart, demo };
 const command = commands[process.argv[2]];
 if (!command) {
-    console.error('usage: node scripts/launch.js start|stop|restore|autostart');
+    console.error('usage: node scripts/launch.js start|stop|restore|autostart|demo');
     process.exit(2);
 }
 

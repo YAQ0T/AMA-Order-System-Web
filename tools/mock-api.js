@@ -75,13 +75,15 @@ const makeOrder = (index) => {
     status,
     city: CITIES[index % CITIES.length],
     makerId: 2,
-    accounterId: status === 'archived' ? null : 5,
+    // Nobody picks an accountant: they take completed orders. Every other
+    // completed order is still waiting for one ("جاهزة للمحاسبة").
+    accounterId: ['completed', 'entered_erp'].includes(status) && !(status === 'completed' && index % 2 === 0) ? 5 : null,
     isOnline: index % 7 === 3,
     isUrgent: status !== 'archived' && index % 9 === 4,
     createdAt: created.toISOString(),
     updatedAt: created.toISOString(),
     Maker: users[1],
-    Accounter: status === 'archived' ? null : users[4],
+    Accounter: ['completed', 'entered_erp'].includes(status) && !(status === 'completed' && index % 2 === 0) ? users[4] : null,
     AssignedTakers: status === 'archived' || open ? [] : [users[2], ...(index % 2 ? [users[3]] : [])],
     Items: items,
     History:
@@ -332,12 +334,13 @@ const server = http.createServer(async (req, res) => {
     if (!archived && body.openToAll !== true && !hasTakers) {
       return send(400, { error: 'Active orders require at least one taker' });
     }
+    if (!archived && !String(body.city || '').trim()) return send(400, { error: 'Choose a city' });
     const created = {
       ...makeOrder(orders.length),
       id: nextOrderId++,
       title: body.title,
       description: body.description ?? null,
-      city: body.city,
+      city: String(body.city || '').trim() || null,
       status: body.status === 'archived' ? 'archived' : 'pending',
       makerId: user.id,
       isOnline: body.isOnline === true,
@@ -395,6 +398,79 @@ const server = http.createServer(async (req, res) => {
     return send(200, forRole(order, 'taker'));
   }
 
+  // Completed orders no accountant has taken - mirrors GET /api/orders/accounter/available.
+  if (pathname === '/api/orders/accounter/available' && req.method === 'GET') {
+    if (needsAuth()) return undefined;
+    if (!['accounter', 'admin'].includes(user.role)) return send(403, { error: 'Only accounters or admins can view ERP-entered orders' });
+    const available = orders
+      .filter((o) => o.status === 'completed' && !o.accounterId)
+      .sort((a, b) => Number(b.isUrgent) - Number(a.isUrgent) || new Date(a.updatedAt) - new Date(b.updatedAt));
+    const limit = Math.min(Number(searchParams.get('limit')) || 20, 20);
+    const offset = Number(searchParams.get('offset')) || 0;
+    return send(200, { orders: available.slice(offset, offset + limit), pagination: { total: available.length, limit, offset } });
+  }
+
+  // An accountant takes a completed order - mirrors POST /api/orders/:id/accounting-claim.
+  const accountingMatch = pathname.match(/^\/api\/orders\/(\d+)\/accounting-claim$/);
+  if (accountingMatch && req.method === 'POST') {
+    if (needsAuth()) return undefined;
+    if (user.role !== 'accounter') return send(403, { error: 'Only accountants can take orders for accounting' });
+    const order = orders.find((o) => o.id === Number(accountingMatch[1]));
+    if (!order) return send(404, { error: 'Order not found' });
+    if (order.accounterId !== user.id) {
+      if (order.accounterId) return send(409, { error: 'This order has already been taken by another accountant', code: 'ORDER_TAKEN' });
+      if (order.status !== 'completed') return send(409, { error: 'This order is not ready for the accountant yet' });
+      order.accounterId = user.id;
+      order.Accounter = user;
+      order.updatedAt = new Date().toISOString();
+    }
+    return send(200, order);
+  }
+
+  // A taker brings other takers in - mirrors POST /api/orders/:id/helpers.
+  const helpersMatch = pathname.match(/^\/api\/orders\/(\d+)\/helpers$/);
+  if (helpersMatch && req.method === 'POST') {
+    if (needsAuth()) return undefined;
+    if (user.role !== 'taker') return send(403, { error: 'Only takers can add helpers' });
+    const order = orders.find((o) => o.id === Number(helpersMatch[1]));
+    if (!order) return send(404, { error: 'Order not found' });
+    if (!order.AssignedTakers.some((t) => t.id === user.id)) return send(403, { error: 'Not authorized to edit this order' });
+    if (!ACTIVE.includes(order.status)) return send(409, { error: `Order is ${order.status} and can no longer be changed` });
+    const body = await readBody();
+    const ids = Array.isArray(body.takerIds) ? body.takerIds.map(Number) : [];
+    const helpers = users.filter((u) => ids.includes(u.id) && u.role === 'taker' && u.isApproved);
+    if (helpers.length !== new Set(ids).size) return send(400, { error: 'Invalid taker selection' });
+    for (const helper of helpers) if (!order.AssignedTakers.some((t) => t.id === helper.id)) order.AssignedTakers.push(helper);
+    return send(200, forRole(order, 'taker'));
+  }
+
+  // One item's quantity / one new item - mirror the real single-item endpoints.
+  const itemQtyMatch = pathname.match(/^\/api\/orders\/(\d+)\/items\/quantity$/);
+  const itemAddMatch = pathname.match(/^\/api\/orders\/(\d+)\/items$/);
+  if ((itemQtyMatch && req.method === 'PATCH') || (itemAddMatch && req.method === 'POST')) {
+    if (needsAuth()) return undefined;
+    const order = orders.find((o) => o.id === Number((itemQtyMatch || itemAddMatch)[1]));
+    if (!order) return send(404, { error: 'Order not found' });
+    const allowed = user.role === 'admin' || order.makerId === user.id || order.AssignedTakers.some((t) => t.id === user.id);
+    if (!allowed) return send(403, { error: 'Not authorized to edit this order' });
+    if (!ACTIVE.includes(order.status)) return send(409, { error: `Order is ${order.status} and can no longer be changed` });
+    const body = await readBody();
+    const quantity = Number(body.quantity);
+    const name = String(body.name || '').trim();
+    if (!(quantity > 0)) return send(400, { error: `Invalid quantity for "${name}"` });
+    if (itemQtyMatch) {
+      const item = order.Items.find((i) => i.name === body.name);
+      if (!item) return send(404, { error: `Item "${body.name}" not found in this order` });
+      item.quantity = quantity;
+      item.updatedAt = new Date().toISOString();
+      return send(200, forRole(order, user.role));
+    }
+    if (!name) return send(400, { error: 'Item name is required' });
+    if (order.Items.some((i) => i.name.toLowerCase() === name.toLowerCase())) return send(400, { error: `Duplicate item "${name}"` });
+    order.Items.push({ id: nextItemId++, name, quantity, price: null, status: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    return send(201, forRole(order, user.role));
+  }
+
   const orderMatch = pathname.match(/^\/api\/orders\/(\d+)$/);
   if (orderMatch) {
     if (needsAuth()) return undefined;
@@ -410,6 +486,25 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'PUT') {
       const body = await readBody();
       const order = orders[index];
+      const isManager = user.role === 'admin' || order.makerId === user.id;
+      // As routes/orders.js: the order's maker (and the admin) can change it at
+      // any stage, also after ERP; a finished order is not the takers' any
+      // more; takers only move an order forward.
+      if (order.status === 'entered_erp' && !isManager) {
+        return send(409, { error: 'Order is entered_erp and can no longer be changed' });
+      }
+      if (!isManager && order.status === 'completed') {
+        return send(409, { error: 'Order is completed and can no longer be changed' });
+      }
+      if (!isManager && body.status && body.status !== order.status) {
+        const forward = { pending: ['in-progress', 'completed'], 'in-progress': ['completed'] };
+        if (!(forward[order.status] || []).includes(body.status)) return send(400, { error: 'This status change is not allowed' });
+      }
+      if (body.city !== undefined && !String(body.city || '').trim() && (body.status || order.status) !== 'archived') {
+        return send(400, { error: 'Choose a city' });
+      }
+      const wasDone = ['completed', 'entered_erp'].includes(order.status);
+      let itemsChanged = false;
 
       // Open orders, as in routes/orders.js: openToAll clears the takers; an
       // active order may only be left without one when that was asked for
@@ -471,8 +566,19 @@ const server = http.createServer(async (req, res) => {
         // structural edits so a tick made meanwhile is not overwritten.
         const statusByName = new Map((order.Items || []).map((i) => [i.name, i.status ?? null]));
         const isTaker = user.role === 'taker';
+        // The edit window's starting copy: a quantity left as it was there keeps
+        // the current one (a taker may have changed it meanwhile), like
+        // mergeItemEdits in server/routes/order_helpers.js.
+        const base = new Map((Array.isArray(body.baseItems) ? body.baseItems : []).map((i) => [String(i.name), Number(i.quantity)]));
+        const before = new Map((order.Items || []).map((i) => [i.name, i]));
+        const sentNames = new Set(body.items.map((i) => i.name));
+        const keptMeanwhile = (order.Items || []).filter((i) => base.size && !base.has(i.name) && !sentNames.has(i.name));
 
         order.Items = body.items.map((item) => {
+          const prev = before.get(item.name);
+          const quantity = prev && base.has(item.name) && base.get(item.name) === Number(item.quantity) ? Number(prev.quantity) : Number(item.quantity);
+          const qtyChanged = prev ? Number(prev.quantity) !== quantity : true;
+          if (qtyChanged) itemsChanged = true;
           const key = String(item.name).toLowerCase();
           const price = isTaker
             ? priceByName.get(key) ?? null
@@ -481,17 +587,27 @@ const server = http.createServer(async (req, res) => {
               : Number(item.price).toFixed(2);
           const status = Object.prototype.hasOwnProperty.call(item, 'status')
             ? item.status ?? null
-            : statusByName.get(item.name) ?? null;
+            : isManager && qtyChanged
+              ? null // the maker changed it: it needs checking again
+              : statusByName.get(item.name) ?? null;
           return {
             id: nextItemId++,
             name: item.name,
-            quantity: Number(item.quantity),
+            quantity,
             price,
             status,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           };
         });
+        // Items a taker added while the window was open stay.
+        order.Items.push(...keptMeanwhile);
+        if ([...before.keys()].some((name) => !order.Items.some((i) => i.name === name))) itemsChanged = true;
+      }
+      // A finished order (also one entered into ERP) the maker changed, or set
+      // back, goes back to its takers.
+      if (wasDone && isManager && (body.status ? ['pending', 'in-progress'].includes(body.status) : itemsChanged)) {
+        order.status = body.status || (order.AssignedTakers.length ? 'in-progress' : 'pending');
       }
       order.updatedAt = new Date().toISOString();
       return send(200, forRole(order, user.role));

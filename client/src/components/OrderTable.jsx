@@ -1,9 +1,20 @@
 import { useState } from 'react';
 
 import { T, statusLabel } from '../lib/labels';
-import { formatDateTime, formatPrice, formatQuantity, lineTotal, orderTitle, orderTotal, formatMoney, orderDescription } from '../lib/format';
+import {
+  formatDateTime,
+  formatPrice,
+  formatQuantity,
+  lineTotal,
+  orderTitle,
+  orderTotal,
+  formatMoney,
+  orderDescription,
+  totalLeavesOutItems,
+  hasPrices,
+} from '../lib/format';
 import { StatusChip, ItemStatusChip, InfoChip, Ltr, EmptyState } from './ui';
-import { isOpenOrder } from '../api/orders';
+import { isOpenOrder, awaitsAccountant } from '../api/orders';
 import { historyText } from '../lib/historyText';
 import { markClasses } from '../lib/orderMarks';
 import OrderMarks from './OrderMarks';
@@ -70,6 +81,21 @@ function ItemButtons({ order, item, onItemStatus, busyItems, onItemEdit }) {
 
 const infoChip = 'chip bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-ink-50';
 
+/** An unavailable item's line total is shown but struck: it is not in the grand total. */
+const LineTotal = ({ item }) => (
+  <Ltr>
+    {item.status === 'unavailable' ? <s>{formatMoney(lineTotal(item))}</s> : formatMoney(lineTotal(item))}
+  </Ltr>
+);
+
+/** The grand total, with a note when unavailable items were left out of it. */
+function GrandTotalNote({ order }) {
+  if (!totalLeavesOutItems(order)) return null;
+  return (
+    <span className="block text-xs font-normal text-slate-500 dark:text-ink-400">{T.totalLeavesOutUnavailable}</span>
+  );
+}
+
 /**
  * Phones: one block per item. The name gets the whole width of its line (in
  * the table it was squeezed to one word per line by the columns next to it),
@@ -103,7 +129,7 @@ function ItemsList({ order, showPrices, onItemStatus, busyItems, onItemEdit }) {
               )}
               {showPrices && (
                 <span className={infoChip}>
-                  {T.total}: <Ltr>{formatMoney(lineTotal(item))}</Ltr>
+                  {T.total}: <LineTotal item={item} />
                 </span>
               )}
               {/* Takers see the status in the buttons (the chosen one is filled). */}
@@ -119,9 +145,10 @@ function ItemsList({ order, showPrices, onItemStatus, busyItems, onItemEdit }) {
           </li>
         ))}
       </ul>
-      {showPrices && total > 0 && (
+      {showPrices && hasPrices(order) && (
         <p className="mt-2 border-t-2 border-slate-300 pt-2 text-end text-sm font-bold dark:border-slate-600">
           {T.grandTotal}: <Ltr>{formatMoney(total)}</Ltr>
+          <GrandTotalNote order={order} />
         </p>
       )}
     </div>
@@ -178,7 +205,7 @@ function ItemsTable({ order, showPrices, onItemStatus, busyItems, onItemEdit, on
                 )}
                 {showPrices && (
                   <td className="py-2">
-                    <Ltr>{formatMoney(lineTotal(item))}</Ltr>
+                    <LineTotal item={item} />
                   </td>
                 )}
                 <td className="py-2">
@@ -200,7 +227,7 @@ function ItemsTable({ order, showPrices, onItemStatus, busyItems, onItemEdit, on
               </tr>
             ))}
           </tbody>
-          {showPrices && total > 0 && (
+          {showPrices && hasPrices(order) && (
             <tfoot>
               <tr className="border-t-2 border-slate-300 dark:border-slate-600">
                 <td colSpan={3} className="py-2 text-end font-bold">
@@ -208,6 +235,7 @@ function ItemsTable({ order, showPrices, onItemStatus, busyItems, onItemEdit, on
                 </td>
                 <td colSpan={2} className="py-2 font-bold">
                   <Ltr>{formatMoney(total)}</Ltr>
+                  <GrandTotalNote order={order} />
                 </td>
                 <td />
                 {(onItemStatus || onItemEdit) && <td />}
@@ -283,7 +311,10 @@ function OrderCard({
           />
         )}
 
-        <div className="min-w-0 flex-1">
+        {/* A real width (basis 16rem), not flex-1's zero: on a phone the
+            buttons then move to their own row instead of squeezing the name
+            and the chips into a column a few letters wide. */}
+        <div className="min-w-0 grow basis-64">
           <div className="mb-1 flex flex-wrap items-center gap-2">
             <h3 className="text-base font-bold">{orderTitle(order)}</h3>
             <span className="text-xs text-slate-400">
@@ -314,10 +345,16 @@ function OrderCard({
                 {T.openToAll}
               </span>
             )}
-            {order.Accounter && (
+            {order.Accounter ? (
               <InfoChip>
                 {T.accounter}: {order.Accounter.username}
               </InfoChip>
+            ) : (
+              awaitsAccountant(order) && (
+                <span className="chip bg-violet-100 text-violet-900 dark:bg-violet-500/20 dark:text-violet-200">
+                  {T.awaitingAccountant}
+                </span>
+              )
             )}
           </div>
 
@@ -338,6 +375,8 @@ function OrderCard({
               {T.print}
             </button>
           )}
+          {/* At every stage, also after ERP: only the order's maker and the
+              admin get onEdit, and every change goes into the history. */}
           {onEdit && (
             <button type="button" className="btn-secondary text-xs" onClick={() => onEdit(order)}>
               {T.edit}

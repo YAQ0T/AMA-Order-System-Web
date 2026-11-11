@@ -103,6 +103,10 @@ app.use((req, res, next) => {
         'Cross-Origin-Opener-Policy': 'same-origin'
     });
     if (req.secure) res.set('Strict-Transport-Security', 'max-age=31536000');
+    // API answers are always fresh: no browser (Safari is the keenest) and no
+    // proxy may keep a copy and show it later - an order list from a cache is
+    // exactly how an accountant would see yesterday's quantities.
+    if (req.path.startsWith('/api/')) res.set('Cache-Control', 'no-store');
     next();
 });
 

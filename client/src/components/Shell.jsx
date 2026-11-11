@@ -52,6 +52,9 @@ function LogoutIcon() {
   );
 }
 
+/** The top bar's icon buttons - a little tighter on phones (NotificationBell matches). */
+const HEADER_BUTTON = 'btn-ghost p-1.5 sm:p-2';
+
 export default function Shell() {
   const user = useAuth((s) => s.user);
   const logout = useAuth((s) => s.logout);
@@ -73,14 +76,17 @@ export default function Shell() {
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-slate-700 dark:bg-ink-900/90">
-        <div className="mx-auto flex max-w-[1400px] items-center gap-3 px-4 py-3">
-          <img src="/logo.png" alt="" className="h-9 w-9 rounded-lg object-contain" />
+        {/* Phones: five buttons leave little room, so the logo and the app
+            name step aside and the line that matters - who is signed in -
+            gets the space (it was cut down to two letters). */}
+        <div className="mx-auto flex max-w-[1400px] items-center gap-1.5 px-4 py-3 sm:gap-3">
+          <img src="/logo.png" alt="" className="hidden h-9 w-9 rounded-lg object-contain sm:block" />
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-base font-bold text-slate-900 dark:text-ink-50">
+            <h1 className="hidden truncate text-base font-bold text-slate-900 sm:block dark:text-ink-50">
               {T.appName}
             </h1>
             {user && (
-              <p className="truncate text-xs text-slate-500 dark:text-ink-400">
+              <p className="truncate text-sm font-bold text-slate-900 sm:text-xs sm:font-normal sm:text-slate-500 dark:text-ink-50 sm:dark:text-ink-400">
                 {user.username} — {roleLabel(user.role)}
               </p>
             )}
@@ -91,7 +97,7 @@ export default function Shell() {
             onClick={() => queryClient.invalidateQueries()}
             title={T.refresh}
             aria-label={T.refresh}
-            className="btn-ghost p-2"
+            className={HEADER_BUTTON}
           >
             <RefreshIcon />
           </button>
@@ -104,7 +110,7 @@ export default function Shell() {
             title={T.darkMode}
             aria-label={T.darkMode}
             aria-pressed={isDark}
-            className="btn-ghost p-2"
+            className={HEADER_BUTTON}
           >
             {isDark ? <SunIcon /> : <MoonIcon />}
           </button>
@@ -114,7 +120,7 @@ export default function Shell() {
             onClick={() => setChangingPassword(true)}
             title={T.changePassword}
             aria-label={T.changePassword}
-            className="btn-ghost p-2"
+            className={HEADER_BUTTON}
           >
             <KeyIcon />
           </button>
@@ -124,7 +130,7 @@ export default function Shell() {
             onClick={logout}
             title={T.logout}
             aria-label={T.logout}
-            className="btn-ghost p-2"
+            className={HEADER_BUTTON}
           >
             <LogoutIcon />
           </button>

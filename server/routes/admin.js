@@ -4,7 +4,7 @@ const { User, Order, OrderItem, OrderLog, ActivityLog, sequelize } = require('..
 const { authenticateToken, forgetUser } = require('../middleware/auth');
 const { requireAdmin } = require('../middleware/adminAuth');
 const { logActivity } = require('../utils/activityLogger');
-const { escapeLike } = require('./order_helpers');
+const { escapeLike, retireAccountingOffers } = require('./order_helpers');
 const { Op } = require('sequelize');
 const { sendServerError } = require('../utils/serverError');
 
@@ -348,6 +348,11 @@ router.delete('/orders/:id', async (req, res) => {
         if (wasOpen) {
             require('../utils/telegram').closeOpenOrder(order.id, null)
                 .catch(err => console.error('Error updating open-order messages:', err));
+        }
+        if (order.status === 'completed' && !order.accounterId) {
+            require('../utils/telegram').closeReadyForAccounting(order.id, null)
+                .catch(err => console.error('Error updating ready-for-accounting messages:', err));
+            await retireAccountingOffers(order.id);
         }
 
         await logActivity(adminId, 'order_deleted', 'order', id, {

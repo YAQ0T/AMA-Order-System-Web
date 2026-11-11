@@ -6,7 +6,7 @@ const telegram = require('../utils/telegram');
 const { logActivity } = require('../utils/activityLogger');
 const { logOrderEvent } = require('../utils/orderRequestLogger');
 const { Op } = require('sequelize');
-const { sanitizeItems, buildOrderIncludes, fetchOrdersForRole, isOpenOrder, assertTakerIds, escapeLike, orderFieldsProblem } = require('./order_helpers');
+const { sanitizeItems, buildOrderIncludes, fetchOrdersForRole, isOpenOrder, assertTakerIds, escapeLike, orderFieldsProblem, mergeItemEdits, parseBaseItems, accountingOfferMessage, retireAccountingOffers, sameNumber, PRICE_LOG_MARK, priceLogText } = require('./order_helpers');
 const { sendServerError, isBadInput } = require('../utils/serverError');
 
 const router = express.Router();
@@ -155,7 +155,15 @@ router.post('/', authenticateToken, async (req, res) => {
         const sanitizedItems = sanitizeItems(items || []);
 
         const orderStatus = status === 'archived' ? 'archived' : 'pending';
-        const normalizedAccounterId = accounterId === '' ? null : accounterId;
+        // Nobody picks the accountant any more: the order is offered to every
+        // accountant once it is completed (routes/orders_accounter.js). An
+        // accounterId sent anyway (older clients) is still honoured.
+        const normalizedAccounterId = accounterId === '' || accounterId === undefined ? null : accounterId;
+        // An order that goes out needs its city - takers sort their work by
+        // it. (A draft may still lack one; it is checked when sent out.)
+        if (orderStatus !== 'archived' && !(typeof city === 'string' && city.trim())) {
+            return res.status(400).json({ error: 'Choose a city' });
+        }
         // An open order goes to no one in particular: the first taker to take
         // it gets it (POST /api/orders/:id/claim). It has to be asked for
         // explicitly, so a maker who simply forgot to pick a taker is still
@@ -170,9 +178,6 @@ router.post('/', authenticateToken, async (req, res) => {
             if (!isOpen && !hasTakers) {
                 return res.status(400).json({ error: 'Active orders require at least one taker' });
             }
-            if (normalizedAccounterId === undefined || normalizedAccounterId === null) {
-                return res.status(400).json({ error: 'Active orders require an accounter' });
-            }
             if (hasTakers) {
                 try {
                     assignedTakerIds = await assertTakerIds(assignedTakerIds);
@@ -184,7 +189,7 @@ router.post('/', authenticateToken, async (req, res) => {
             }
         }
 
-        if (normalizedAccounterId !== undefined && normalizedAccounterId !== null) {
+        if (normalizedAccounterId !== null) {
             const accounter = await User.findByPk(normalizedAccounterId);
             if (!accounter || accounter.role !== 'accounter') {
                 return res.status(400).json({ error: 'Invalid accounter selection' });
@@ -200,7 +205,8 @@ router.post('/', authenticateToken, async (req, res) => {
             description: (typeof description === 'string' && description.trim()) || null,
             makerId: req.user.id,
             status: orderStatus,
-            city,
+            // No city is stored as none ('' is not one of the cities).
+            city: (typeof city === 'string' && city.trim()) || null,
             accounterId: normalizedAccounterId,
             isOnline: req.body.isOnline === true,
             // Every order an admin creates is urgent; nobody else can ask for it.
@@ -483,6 +489,28 @@ router.put('/:id', authenticateToken, async (req, res) => {
             return res.status(403).json({ error: 'Not authorized to edit this order' });
         }
 
+        // The maker who created an order can always change it, also after it
+        // was entered into ERP (and the admin can change any order). Every
+        // change goes into the order's history; after ERP the history says so
+        // too, and the accountant who entered it is told (see below). Takers
+        // are done with it by then.
+        if (order.status === 'entered_erp' && !isAdmin && !isMaker) {
+            return res.status(409).json({ error: 'Order is entered_erp and can no longer be changed' });
+        }
+        const isTakerEdit = !isMaker && !isAdmin;
+        // A finished order is no longer the takers' to change: if it needs
+        // changes, the maker sends it back to them (the "reopen" below).
+        if (isTakerEdit && order.status === 'completed') {
+            return res.status(409).json({ error: 'Order is completed and can no longer be changed' });
+        }
+        // Takers only move an order forward: start it, finish it.
+        if (isTakerEdit && status && status !== order.status) {
+            const forward = { pending: ['in-progress', 'completed'], 'in-progress': ['completed'] };
+            if (!(forward[order.status] || []).includes(status)) {
+                return res.status(400).json({ error: 'This status change is not allowed' });
+            }
+        }
+
         // Who works on an order is the maker's decision: a taker must not be
         // able to hand an order to someone else, or drop it.
         if (!isMaker && !isAdmin && (openToAll !== undefined || assignedTakerIds !== undefined)) {
@@ -529,9 +557,14 @@ router.put('/:id', authenticateToken, async (req, res) => {
             if (!sentTakers && !wantsOpen) {
                 return res.status(400).json({ error: 'Select at least one taker before activating an archived order' });
             }
-            if (accounterId === undefined || accounterId === null || accounterId === '') {
-                return res.status(400).json({ error: 'Select an accounter before activating an archived order' });
-            }
+        }
+        // An order that is out (or being sent out) keeps a city. The maker
+        // cannot clear it, and a draft without one cannot be sent out.
+        const cityAfter = req.body.city !== undefined ? req.body.city : order.city;
+        const hasCityAfter = typeof cityAfter === 'string' && cityAfter.trim() !== '';
+        const staysDraft = status ? status === 'archived' : order.status === 'archived';
+        if (!hasCityAfter && !staysDraft && (isUnarchiving || req.body.city !== undefined)) {
+            return res.status(400).json({ error: 'Choose a city' });
         }
 
         transaction = await sequelize.transaction();
@@ -553,10 +586,15 @@ router.put('/:id', authenticateToken, async (req, res) => {
             transaction
         });
 
+        // The status and accountant as they are NOW (read under the lock), before this save.
+        const statusBefore = order.status;
+        const accounterBefore = order.accounterId;
         // Open orders: check the state this request would leave the order in,
         // against the row as it is NOW (read under the lock - a taker may have
         // just taken it).
         const wasOpen = isOpenOrder(order);
+        // Likewise for accountants: completed and not taken by any of them yet.
+        const offeredBefore = order.status === 'completed' && !order.accounterId;
         const currentTakerIds = (order.AssignedTakers || []).map(t => t.id);
         const nextTakerIds = takerUpdate !== undefined ? (takerUpdate || []) : currentTakerIds;
         const nextStatus = status || order.status;
@@ -597,15 +635,16 @@ router.put('/:id', authenticateToken, async (req, res) => {
                 changeSummary.push('title');
             }
 
-            // Log City Change
-            if (req.body.city !== undefined && req.body.city !== order.city) {
+            // Log City Change ('' or null = no city; only a draft may have none, see above)
+            const cityValue = req.body.city === undefined ? undefined : ((typeof req.body.city === 'string' && req.body.city.trim()) || null);
+            if (cityValue !== undefined && cityValue !== (order.city || null)) {
                 await OrderLog.create({
                     orderId: order.id,
                     previousDescription: order.city || 'None',
-                    newDescription: `City: ${order.city || 'None'} -> ${req.body.city}`,
+                    newDescription: `City: ${order.city || 'None'} -> ${cityValue || 'None'}`,
                     changedBy: req.user.id
                 }, { transaction });
-                order.city = req.body.city;
+                order.city = cityValue;
                 changeSummary.push('city');
             }
 
@@ -652,117 +691,83 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
             // Handle Items Update
             if (Array.isArray(items)) {
-                const oldItems = order.Items || [];
+                const oldItems = order.Items || []; // read under the lock
                 const newItems = sanitizedItems || [];
-
-                const oldItemsMap = new Map(oldItems.map(i => [i.name, Number(i.quantity)]));
-                const newItemsMap = new Map(newItems.map(i => [i.name, Number(i.quantity)]));
-
-                // Track which items are updates vs additions
-                const isUpdate = new Map();
-
-                // Check for Updates and Additions
-                for (const [name, newQty] of newItemsMap) {
-                    if (oldItemsMap.has(name)) {
-                        const oldQty = oldItemsMap.get(name);
-                        isUpdate.set(name, true); // Mark as existing item
-                        if (oldQty !== newQty) {
-                            itemsChangedForTakers = true;
-                            await OrderLog.create({
-                                orderId: order.id,
-                                previousDescription: String(oldQty),
-                                newDescription: `Updated ${name}: Qty ${oldQty} -> ${newQty}`,
-                                changedBy: req.user.id
-                            }, { transaction });
-                        }
-                        oldItemsMap.delete(name); // processed
-                    } else {
-                        isUpdate.set(name, false); // Mark as new item
-                        itemsChangedForTakers = true;
-                        await OrderLog.create({
-                            orderId: order.id,
-                            previousDescription: 'None',
-                            newDescription: `Added: ${name} (Qty: ${newQty})`,
-                            changedBy: req.user.id
-                        }, { transaction });
-                    }
-                }
-
-                // Check for Removals (remaining items in oldItemsMap)
-                for (const [name, oldQty] of oldItemsMap) {
-                    itemsChangedForTakers = true;
-                    await OrderLog.create({
-                        orderId: order.id,
-                        previousDescription: `${name} (${oldQty})`,
-                        newDescription: `Removed: ${name}`,
-                        changedBy: req.user.id
-                    }, { transaction });
-                }
-
-                // Preserve status when not explicitly provided, but allow updates when sent
-                const existingItemsStatus = new Map(
-                    oldItems.map(item => [item.name, item.status ?? null])
-                );
                 const isTaker = req.user.role === 'taker';
-                const existingItemsPriceByName = new Map();
-                const existingItemsPriceById = new Map();
-                if (isTaker) {
-                    const pricedItems = await OrderItem.findAll({
-                        where: { orderId: order.id },
-                        attributes: ['id', 'name', 'price'],
-                        transaction
-                    });
-                    pricedItems.forEach((item) => {
-                        if (item.name) {
-                            existingItemsPriceByName.set(item.name.toLowerCase(), item.price ?? null);
-                        }
-                        existingItemsPriceById.set(item.id, item.price ?? null);
-                    });
-                }
+                const oldByName = new Map(oldItems.map((i) => [i.name, i]));
 
-                // Remove old items and create new ones, keeping status changes sent from the client
-                await OrderItem.destroy({ where: { orderId: order.id }, transaction });
-                const orderItems = [];
-
-                for (const item of newItems) {
-                    const previouslyExisting = isUpdate.get(item.name);
-                    const previousStatus = previouslyExisting ? (existingItemsStatus.get(item.name) ?? null) : null;
-                    const nameKey = item.name.toLowerCase();
-                    const statusProvided = statusProvidedByName.get(nameKey) ?? false;
-                    const nextStatus = (previouslyExisting && !statusProvided)
-                        ? previousStatus
-                        : (item.status ?? null);
-                    let nextPrice = item.price;
+                // What the items become. The app's edit window also sends the
+                // items it STARTED from (baseItems): only what the maker
+                // actually changed is applied, so whatever takers changed in
+                // the meantime - a quantity, a newly added item - is kept
+                // instead of being written over with the window's old copy.
+                let finalItems;
+                if (editorIsManager && Array.isArray(req.body.baseItems)) {
+                    finalItems = mergeItemEdits({ current: oldItems, base: parseBaseItems(req.body.baseItems), next: newItems });
+                } else {
+                    // The whole list as sent (older clients, scripts).
+                    let storedPrices = null;
                     if (isTaker) {
-                        const itemId = itemIdByName.get(nameKey);
-                        if (itemId != null && existingItemsPriceById.has(itemId)) {
-                            nextPrice = existingItemsPriceById.get(itemId);
-                        } else if (existingItemsPriceByName.has(nameKey)) {
-                            nextPrice = existingItemsPriceByName.get(nameKey);
-                        } else {
-                            nextPrice = null;
+                        // Takers never receive prices: keep the stored ones.
+                        const priced = await OrderItem.findAll({ where: { orderId: order.id }, attributes: ['id', 'name', 'price'], transaction });
+                        storedPrices = { byId: new Map(priced.map((i) => [i.id, i.price ?? null])), byName: new Map(priced.map((i) => [i.name.toLowerCase(), i.price ?? null])) };
+                    }
+                    finalItems = newItems.map((item) => {
+                        const before = oldByName.get(item.name);
+                        const key = item.name.toLowerCase();
+                        let status = before && !(statusProvidedByName.get(key) ?? false) ? (before.status ?? null) : (item.status ?? null);
+                        // The maker changed the quantity: the item needs checking again.
+                        if (editorIsManager && before && !(statusProvidedByName.get(key) ?? false) && Number(before.quantity) !== item.quantity) status = null;
+                        let price = item.price;
+                        if (storedPrices) {
+                            const id = itemIdByName.get(key);
+                            price = id != null && storedPrices.byId.has(id) ? storedPrices.byId.get(id) : (storedPrices.byName.get(key) ?? null);
                         }
-                    }
-
-                    // Log status changes for existing items
-                    if (previouslyExisting && previousStatus !== nextStatus) {
-                        await OrderLog.create({
-                            orderId: order.id,
-                            previousDescription: `${item.name}: ${previousStatus || 'none'}`,
-                            newDescription: `${item.name}: ${nextStatus || 'none'}`,
-                            changedBy: req.user.id
-                        }, { transaction });
-                    }
-
-                    orderItems.push({
-                        ...item,
-                        orderId: order.id,
-                        status: nextStatus,
-                        price: nextPrice
+                        return { name: item.name, quantity: item.quantity, price, status };
                     });
                 }
-                await OrderItem.bulkCreate(orderItems, { transaction });
-                changeSummary.push('items');
+
+                // The order's history: what was added, removed, re-quantified,
+                // re-priced, (un)ticked. Prices only for the maker / admin: a
+                // taker's copy of the order has none to compare (and takers
+                // cannot change them - their stored prices are kept above).
+                const log = (previousDescription, newDescription) => OrderLog.create({ orderId: order.id, previousDescription, newDescription, changedBy: req.user.id }, { transaction });
+                let itemsChanged = false;
+                const finalNames = new Set(finalItems.map((i) => i.name));
+                for (const item of finalItems) {
+                    const before = oldByName.get(item.name);
+                    if (!before) {
+                        itemsChangedForTakers = true;
+                        itemsChanged = true;
+                        await log('None', `Added: ${item.name} (Qty: ${item.quantity})`);
+                        if (editorIsManager && item.price != null) await log(PRICE_LOG_MARK, priceLogText(item.name, null, item.price));
+                        continue;
+                    }
+                    const oldQty = Number(before.quantity);
+                    if (oldQty !== item.quantity) {
+                        itemsChangedForTakers = true;
+                        itemsChanged = true;
+                        await log(String(oldQty), `Updated ${item.name}: Qty ${oldQty} -> ${item.quantity}`);
+                    }
+                    if (editorIsManager && !sameNumber(before.price, item.price)) {
+                        itemsChanged = true;
+                        await log(PRICE_LOG_MARK, priceLogText(item.name, before.price, item.price));
+                    }
+                    if ((before.status ?? null) !== (item.status ?? null)) {
+                        itemsChanged = true;
+                        await log(`${item.name}: ${before.status || 'none'}`, `${item.name}: ${item.status || 'none'}`);
+                    }
+                }
+                for (const before of oldItems) {
+                    if (finalNames.has(before.name)) continue;
+                    itemsChangedForTakers = true;
+                    itemsChanged = true;
+                    await log(`${before.name} (${Number(before.quantity)})`, `Removed: ${before.name}`);
+                }
+
+                await OrderItem.destroy({ where: { orderId: order.id }, transaction });
+                await OrderItem.bulkCreate(finalItems.map((item) => ({ ...item, orderId: order.id })), { transaction });
+                if (itemsChanged) changeSummary.push('items');
             }
 
             // Handle Assigned Takers Update
@@ -831,10 +836,26 @@ router.put('/:id', authenticateToken, async (req, res) => {
             changeSummary.push('status');
         }
 
+        // Sending a finished order back. When the maker (or admin) changes the
+        // items of a completed order - or one already entered into ERP - or
+        // sets it back to pending / in progress, it goes back to the same
+        // takers, shows up in their lists again, and whatever changed has lost
+        // its tick (see the items above). If an accountant had taken it, it
+        // returns to that accountant once done (to enter into ERP again).
+        const wasDone = statusBefore === 'completed' || statusBefore === 'entered_erp';
+        const reopened = wasDone && editorIsManager && (
+            (status ? ['pending', 'in-progress'].includes(status) : itemsChangedForTakers)
+        );
+        let targetStatus = status;
+        if (reopened && !status) targetStatus = nextTakerIds.length ? 'in-progress' : 'pending';
+        // Ready for an accountant and nobody has taken it: offered to them all.
+        let offerToAccountants = false;
+        let accountantsToTell = [];
+
         // Handle Status Update
-        if (status) {
+        if (targetStatus) {
             // Validate entered_erp status can only be set by accounters, admins, or makers
-            if (status === 'entered_erp' && !['accounter', 'admin', 'maker'].includes(req.user.role)) {
+            if (targetStatus === 'entered_erp' && !['accounter', 'admin', 'maker'].includes(req.user.role)) {
                 if (transaction) {
                     await transaction.rollback();
                     transaction = null;
@@ -843,13 +864,26 @@ router.put('/:id', authenticateToken, async (req, res) => {
             }
 
             const oldStatus = order.status;
-            order.status = status;
-            if (oldStatus !== status) {
+            order.status = targetStatus;
+            if (oldStatus !== targetStatus) {
                 changeSummary.push('status');
+                await OrderLog.create({
+                    orderId: order.id,
+                    previousDescription: oldStatus,
+                    newDescription: `Status: ${oldStatus} -> ${targetStatus}`,
+                    changedBy: req.user.id
+                }, { transaction });
             }
-
+            if (reopened) {
+                await OrderLog.create({
+                    orderId: order.id,
+                    previousDescription: statusBefore,
+                    newDescription: 'Sent back to the takers',
+                    changedBy: req.user.id
+                }, { transaction });
+            }
             // If changing from 'archived' to 'pending' (Sending the order), notify takers
-            if (oldStatus === 'archived' && status === 'pending') {
+            if (oldStatus === 'archived' && targetStatus === 'pending') {
                 // Refresh the sent timestamp when an archived order is re-sent
                 order.createdAt = new Date();
 
@@ -873,22 +907,81 @@ router.put('/:id', authenticateToken, async (req, res) => {
             if (req.user.role === 'taker') {
                 await Notification.create({
                     userId: order.makerId,
-                    message: `Order #${order.id} status updated to '${status}' by ${req.user.username}`,
+                    message: `Order #${order.id} status updated to '${targetStatus}' by ${req.user.username}`,
                     type: 'info',
                     orderId: order.id
                 }, { transaction });
             }
 
-            // If status changes to 'completed' and there's an assigned accounter, notify them
-            if (status === 'completed' && oldStatus !== 'completed' && order.accounterId) {
+            // Just completed. If an accountant already has it (they took it
+            // before the order was sent back, or an older order), it goes to
+            // them; otherwise it is offered to every accountant.
+            if (targetStatus === 'completed' && oldStatus !== 'completed') {
+                if (order.accounterId) {
+                    await Notification.create({
+                        userId: order.accounterId,
+                        message: `New completed order ready for review: Order #${order.id} - ${order.title || 'Untitled Order'}`,
+                        type: 'alert',
+                        orderId: order.id
+                    }, { transaction });
+                    accounterToNotify = order.accounterId;
+                } else {
+                    offerToAccountants = true;
+                    const accountants = await User.findAll({ where: { role: 'accounter', isApproved: true }, attributes: ['id'], transaction });
+                    if (accountants.length) {
+                        await Notification.bulkCreate(accountants.map((a) => ({
+                            userId: a.id,
+                            message: accountingOfferMessage(order),
+                            type: 'alert',
+                            orderId: order.id
+                        })), { transaction });
+                    }
+                }
+            }
+
+            if (reopened) {
+                const takers = await order.getAssignedTakers({ attributes: ['id'], transaction });
+                if (takers.length) {
+                    await Notification.bulkCreate(takers.map((t) => ({
+                        userId: t.id,
+                        message: `Order #${order.id} was sent back to you for changes by ${req.user.username}`,
+                        type: 'alert',
+                        orderId: order.id
+                    })), { transaction });
+                }
+                if (order.accounterId) {
+                    accountantsToTell = [order.accounterId];
+                    await Notification.create({
+                        userId: order.accounterId,
+                        message: `Order #${order.id} was sent back to the takers by ${req.user.username}; it returns to you when completed`,
+                        type: 'info',
+                        orderId: order.id
+                    }, { transaction });
+                }
+            }
+        }
+
+        // Changed after it was entered into ERP. The history says so (written
+        // last, so it heads this save's entries), and the accountant who
+        // entered it is told: ERP may need the same change. When it went back
+        // to the takers, or back to "completed", they were told above already.
+        let accountantToTellOfErpEdit = null;
+        if (statusBefore === 'entered_erp' && changeSummary.length > 0) {
+            await OrderLog.create({
+                orderId: order.id,
+                previousDescription: 'entered_erp',
+                newDescription: 'Changed after it was entered into ERP',
+                changedBy: req.user.id
+            }, { transaction });
+            const toldAlready = reopened || order.status === 'completed';
+            if (!toldAlready && accounterBefore && accounterBefore !== req.user.id) {
+                accountantToTellOfErpEdit = accounterBefore;
                 await Notification.create({
-                    userId: order.accounterId,
-                    message: `New completed order ready for review: Order #${order.id} - ${order.title || 'Untitled Order'}`,
+                    userId: accounterBefore,
+                    message: `Order #${order.id} was changed by ${req.user.username} after it was entered into ERP`,
                     type: 'alert',
                     orderId: order.id
                 }, { transaction });
-
-                accounterToNotify = order.accounterId;
             }
         }
 
@@ -898,11 +991,15 @@ router.put('/:id', authenticateToken, async (req, res) => {
         // and a save that changed nothing should not ping anyone's phone.
         const changedForTakers = itemsChangedForTakers ||
             changeSummary.some(c => ['title', 'city', 'description', 'isOnline', 'isUrgent'].includes(c));
+        // Only while the order is theirs to work on: once it is finished (or
+        // a draft), a new customer name or city is no news to its takers.
+        const liveForTakersNow = order.status === 'pending' || order.status === 'in-progress';
 
         // General Notification for Edits (Title/Description/Items)
         // If the maker (or an admin) edits, notify the takers who were already on the order
-        // (newly added ones were just told they are assigned).
-        if (editorIsManager && changedForTakers && order.status !== 'archived') {
+        // (newly added ones were just told they are assigned; a sent-back order
+        // already told its takers above).
+        if (editorIsManager && changedForTakers && !reopened && liveForTakersNow) {
             const currentTakers = await order.getAssignedTakers({ transaction });
             const toTell = currentTakers.filter(t => !addedTakerIds.includes(t.id));
             if (toTell.length > 0) {
@@ -991,27 +1088,62 @@ router.put('/:id', authenticateToken, async (req, res) => {
             }
         }
 
+        // Completed with no accountant yet: offer it to every accountant.
+        if (offerToAccountants) {
+            telegram.broadcastReadyForAccounting(updatedOrder)
+                .catch(err => console.error('Error offering the order to accountants:', err));
+        }
+        // It was on offer and is not any more (sent back, archived, entered
+        // into ERP, given an accountant): edit the messages that offered it.
+        const offeredNow = updatedOrder.status === 'completed' && !updatedOrder.accounterId;
+        if (offeredBefore && !offeredNow) {
+            telegram.closeReadyForAccounting(order.id, null, { reopened })
+                .catch(err => console.error('Error updating ready-for-accounting messages:', err));
+            await retireAccountingOffers(order.id);
+        }
+        // Sent back while an accountant had it: tell them it comes back later.
+        if (accountantsToTell.length) {
+            const editor = { id: req.user.id, username: req.user.username };
+            const accountants = await User.findAll({ where: { id: accountantsToTell }, attributes: ['id', 'username'] });
+            telegram.deliverTo(accountants, () => telegram.orderReopenedForAccountantMessage(updatedOrder, editor), { path: '/accounter' })
+                .catch(err => console.error('Error telling the accountant the order was sent back:', err));
+        }
+        // Changed after it was entered into ERP: tell the accountant who entered it.
+        if (accountantToTellOfErpEdit) {
+            const editor = { id: req.user.id, username: req.user.username };
+            const accountant = await User.findByPk(accountantToTellOfErpEdit, { attributes: ['id', 'username'] });
+            if (accountant) {
+                telegram.deliverTo([accountant], () => telegram.orderChangedAfterErpMessage(updatedOrder, editor), { path: '/accounter/erp' })
+                    .catch(err => console.error('Error telling the accountant of a change after ERP:', err));
+            }
+        }
+
         // There is no email. Makers and accountants are told through the
         // in-app notifications created inside the transaction above.
         //
         // When the MAKER (or an admin) changes an order, its takers are
-        // messaged on Telegram (unless it is archived or already entered into
-        // ERP). Whoever is new to the order - every taker, when an archived
-        // order is sent out - gets "new order"; the others get "order updated",
-        // and only if something they can see changed. One message each, never
-        // both. Takers who have not linked Telegram see it in the app.
-        const liveForTakers = !['archived', 'entered_erp'].includes(updatedOrder.status);
+        // messaged on Telegram - while it is theirs to work on (pending or in
+        // progress: not a draft, and not once it is finished). Whoever is new
+        // to the order - every taker, when an archived order is sent out -
+        // gets "new order"; the others get "order updated", and only if
+        // something they can see changed. One message each, never both.
+        // Takers who have not linked Telegram see it in the app.
+        const liveForTakers = ['pending', 'in-progress'].includes(updatedOrder.status);
         if (editorIsManager && liveForTakers && updatedOrder.AssignedTakers && updatedOrder.AssignedTakers.length > 0) {
             const isSendOut = takersToNotifyOnResend.length > 0;
             const isNew = (t) => isSendOut || addedTakerIds.includes(t.id);
             const newcomers = updatedOrder.AssignedTakers.filter(isNew);
-            const others = changedForTakers ? updatedOrder.AssignedTakers.filter(t => !isNew(t)) : [];
+            // A sent-back order always tells its takers, even when only the
+            // status changed; otherwise only if something they see changed.
+            const others = changedForTakers || reopened ? updatedOrder.AssignedTakers.filter(t => !isNew(t)) : [];
 
             if (newcomers.length || others.length) {
                 const editor = await User.findByPk(req.user.id, { attributes: ['id', 'username'] });
                 telegram.deliverTo(newcomers, () => telegram.orderAssignedMessage(updatedOrder, editor))
                     .catch(err => console.error('Error notifying newly assigned takers:', err));
-                telegram.deliverTo(others, () => telegram.orderUpdatedMessage(updatedOrder, editor))
+                telegram.deliverTo(others, () => (reopened
+                    ? telegram.orderReopenedMessage(updatedOrder, editor)
+                    : telegram.orderUpdatedMessage(updatedOrder, editor)))
                     .catch(err => console.error('Error notifying takers of order update:', err));
             }
         }
@@ -1124,6 +1256,11 @@ router.delete('/:id', authenticateToken, async (req, res) => {
         if (wasOpen) {
             telegram.closeOpenOrder(order.id, null)
                 .catch(err => console.error('Error updating open-order messages:', err));
+        }
+        if (order.status === 'completed' && !order.accounterId) {
+            telegram.closeReadyForAccounting(order.id, null)
+                .catch(err => console.error('Error updating ready-for-accounting messages:', err));
+            await retireAccountingOffers(order.id);
         }
 
         await logOrderEvent('ORDER_DELETE_SUCCESS', {

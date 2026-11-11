@@ -1,6 +1,33 @@
 const { Op } = require('sequelize');
-const { Order, OrderLog, User, sequelize } = require('../db');
+const { Order, OrderLog, User, Notification, sequelize } = require('../db');
 const { badRequest } = require('../utils/serverError');
+
+/** The in-app offer every accountant gets when an order with no accountant is completed. */
+const accountingOfferMessage = (order) =>
+    `Order #${order.id} is ready for an accountant: ${order.title || 'Untitled'}`;
+
+/**
+ * Once the order is taken by an accountant, sent back or deleted, those offers
+ * ask for nothing any more. Mark them read, so the other accountants' bells
+ * stop counting an order they can no longer take (they stay in the list as
+ * history). Never throws: a notification must not undo the change itself.
+ */
+async function retireAccountingOffers(orderId) {
+    try {
+        await Notification.update(
+            { isRead: true },
+            {
+                where: {
+                    orderId,
+                    isRead: false,
+                    message: { [Op.like]: `Order #${Number(orderId)} is ready for an accountant:%` }
+                }
+            }
+        );
+    } catch (err) {
+        console.error(`Error retiring the accounting offers of order #${orderId}:`, err);
+    }
+}
 
 /**
  * An "open" order is active (pending) with no taker assigned: any taker may
@@ -143,6 +170,102 @@ const sanitizeItems = (items, { allowEmpty = false } = {}) => {
     return cleaned;
 };
 
+// Quantities have 3 decimals and prices 2: compare as numbers, not strings
+// (a DECIMAL arrives from MySQL as "12.50").
+const toNumberOrNull = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+const sameNumber = (a, b) => {
+    const x = toNumberOrNull(a);
+    const y = toNumberOrNull(b);
+    if (x === null || y === null) return x === y;
+    return Math.abs(x - y) < 0.0005;
+};
+
+/**
+ * Price changes go into the order history like every other change - but
+ * takers never see prices, so these entries carry a marker in
+ * previousDescription and buildOrderIncludes leaves them out of a taker's
+ * copy of the history. (Brackets: a marker no customer or item name in
+ * another entry's previousDescription will ever be.)
+ */
+const PRICE_LOG_MARK = '[price]';
+const priceLogText = (name, oldPrice, newPrice) => {
+    const show = (p) => (p === null ? 'None' : String(Number(p)));
+    return `Updated ${name}: Price ${show(toNumberOrNull(oldPrice))} -> ${show(toNumberOrNull(newPrice))}`;
+};
+
+/**
+ * The items an edit window started from (sent as `baseItems`). Lenient on
+ * purpose: an entry that cannot be read is left out, which only means that
+ * item is treated as new in the merge below.
+ */
+const parseBaseItems = (raw) => (Array.isArray(raw) ? raw : [])
+    .filter((i) => i && typeof i === 'object' && typeof i.name === 'string' && i.name.trim())
+    .map((i) => ({ name: i.name.trim(), quantity: toNumberOrNull(i.quantity), price: toNumberOrNull(i.price) }));
+
+/**
+ * Merge an edit made in the app's edit window into the order as it is NOW.
+ *
+ *   current - the order's items now, read under the order's row lock
+ *   base    - the items the window started from
+ *   next    - the items the window saved (already through sanitizeItems)
+ *
+ * Only what the editor changed relative to `base` is applied; everything else
+ * keeps its current value. Without this, a maker who opened the window, then
+ * saved after a taker had changed a quantity or added an item, wrote the old
+ * copy back over the taker's work. Per item:
+ *   - in base and in next: quantity / price take the editor's value only if
+ *     the editor changed it, else the current one. A quantity the editor
+ *     changed loses its tick: the item needs checking again.
+ *   - in base, not in next: the editor removed it - removed.
+ *   - in next, not in base: the editor added (or renamed) it - added, with the
+ *     status the window sent for a renamed item.
+ *   - in current only (added by someone else meanwhile): kept.
+ * Returns the final items as { name, quantity, price, status }.
+ */
+const mergeItemEdits = ({ current, base, next }) => {
+    const key = (name) => name.toLowerCase();
+    const now = new Map(current.map((i) => [key(i.name), i]));
+    const was = new Map(base.map((i) => [key(i.name), i]));
+    const out = [];
+    const seen = new Set();
+
+    for (const item of next) {
+        const k = key(item.name);
+        seen.add(k);
+        const b = was.get(k);
+        const c = now.get(k);
+        if (b && c) {
+            const qtyChanged = !sameNumber(item.quantity, b.quantity);
+            const priceChanged = !sameNumber(item.price, b.price);
+            out.push({
+                name: item.name,
+                quantity: qtyChanged ? item.quantity : Number(c.quantity),
+                price: priceChanged ? item.price : toNumberOrNull(c.price),
+                status: qtyChanged ? null : (c.status ?? null),
+            });
+        } else if (b) {
+            // Someone removed it meanwhile, but the editor kept it: keep it.
+            out.push({ name: item.name, quantity: item.quantity, price: item.price, status: null });
+        } else if (c) {
+            // Added by the editor and, meanwhile, by someone else: one item, the editor's numbers.
+            out.push({
+                name: item.name,
+                quantity: item.quantity,
+                price: item.price ?? toNumberOrNull(c.price),
+                status: sameNumber(item.quantity, c.quantity) ? (c.status ?? null) : null,
+            });
+        } else {
+            out.push({ name: item.name, quantity: item.quantity, price: item.price, status: item.status ?? null });
+        }
+    }
+    for (const c of current) {
+        const k = key(c.name);
+        if (seen.has(k) || was.has(k)) continue; // in base but not in next: removed by the editor
+        out.push({ name: c.name, quantity: Number(c.quantity), price: toNumberOrNull(c.price), status: c.status ?? null });
+    }
+    return out;
+};
+
 const buildOrderIncludes = (role, options = {}) => {
     const { includeHistory = false, makerAttrs, assignedTakerAttrs, historyLimit } = options;
 
@@ -164,6 +287,8 @@ const buildOrderIncludes = (role, options = {}) => {
             association: Order.associations.History,
             attributes: ['id', 'previousDescription', 'newDescription', 'createdAt', 'changedBy'],
             include: [{ association: OrderLog.associations.Editor, attributes: ['id', 'username'] }],
+            // Takers never see prices - not even in the history.
+            ...(role === 'taker' ? { where: { previousDescription: { [Op.ne]: PRICE_LOG_MARK } }, required: false } : {}),
             separate: true,
             limit: historyLimit,
             order: [['createdAt', 'DESC'], ['id', 'DESC']]
@@ -361,6 +486,25 @@ const fetchOrdersForRole = async (req, effectiveRole, options = {}) => {
 };
 
 /**
+ * Completed orders no accountant has taken yet, for accountants to pick from.
+ * The first to take one (POST /api/orders/:id/accounting-claim) gets it.
+ * Urgent ones first; then the longest-waiting first.
+ */
+const fetchAvailableForAccounting = async (req) => {
+    const { limit, offset } = getPaginationParams(req);
+    const { where } = buildSearchWhere(req, {});
+    const result = await Order.findAndCountAll({
+        where: { ...where, status: 'completed', accounterId: null },
+        include: buildOrderIncludes('accounter', { includeHistory: false }),
+        order: [['isUrgent', 'DESC'], ['updatedAt', 'ASC'], ['id', 'ASC']],
+        limit,
+        offset,
+        distinct: true
+    });
+    return { rows: result.rows, count: result.count, limit, offset };
+};
+
+/**
  * Open orders, for takers to pick from: pending with no assignment at all.
  * Urgent ones first; then oldest first, so the customer who has waited
  * longest is served first.
@@ -398,8 +542,17 @@ module.exports = {
     buildSearchWhere,
     fetchOrdersForRole,
     fetchOpenOrders,
+    fetchAvailableForAccounting,
     isOpenOrder,
     assertTakerIds,
     escapeLike,
-    orderFieldsProblem
+    orderFieldsProblem,
+    mergeItemEdits,
+    parseBaseItems,
+    accountingOfferMessage,
+    retireAccountingOffers,
+    toNumberOrNull,
+    sameNumber,
+    PRICE_LOG_MARK,
+    priceLogText
 };

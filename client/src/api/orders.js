@@ -77,6 +77,30 @@ export async function claimOrder(id) {
 export const isOpenOrder = (order) =>
   order?.status === 'pending' && (order.AssignedTakers || []).length === 0;
 
+/**
+ * Completed orders no accountant has taken yet (accountants and the admin).
+ * Urgent first, then the longest-waiting first.
+ */
+export async function fetchAvailableForAccounting({ search, limit = MAX_PAGE_SIZE, offset = 0, signal } = {}) {
+  const data = await api.get('/api/orders/accounter/available', { search, limit, offset }, { signal });
+  return parseOr(orderListSchema, data, { orders: [], pagination: { total: 0, limit, offset } }, 'availableForAccounting');
+}
+
+/** An accountant takes a completed order. A 409 means another accountant was first. */
+export async function claimForAccounting(id) {
+  const data = await api.post(`/api/orders/${id}/accounting-claim`);
+  return parseOr(orderSchema, data, null, 'claimForAccounting');
+}
+
+/** Completed and not taken by an accountant yet. */
+export const awaitsAccountant = (order) => order?.status === 'completed' && !order.accounterId;
+
+/** A taker brings other takers in to help with an order they are on. */
+export async function addHelpers(orderId, takerIds) {
+  const data = await api.post(`/api/orders/${orderId}/helpers`, { takerIds });
+  return parseOr(orderSchema, data, null, 'addHelpers');
+}
+
 /** Pages through everything for reports. Used sparingly - see README. */
 export async function fetchAllOrders({ role, status = 'all', signal, onProgress } = {}) {
   const all = [];
@@ -142,11 +166,29 @@ export async function setItemStatus(orderId, name, status) {
 }
 
 /**
- * Build the `items` array for PUT /api/orders/:id - used for STRUCTURAL edits
- * (adding, removing, re-quantifying or re-pricing items).
- *
- * Send the FULL list: the server rebuilds the order's items from exactly what
- * arrives, so an item missing here is deleted.
+ * Change ONE item's quantity, and nothing else. Takers used to save a quantity
+ * by sending the whole item list as their screen last showed it - and an old
+ * screen sent old quantities back over newer ones.
+ */
+export async function setItemQuantity(orderId, name, quantity) {
+  const data = await api.patch(`/api/orders/${orderId}/items/quantity`, { name, quantity });
+  return parseOr(orderSchema, data, null, 'setItemQuantity');
+}
+
+/** Add ONE item to an order (takers add it without a price). */
+export async function addOrderItem(orderId, { name, quantity }) {
+  const data = await api.post(`/api/orders/${orderId}/items`, { name, quantity });
+  return parseOr(orderSchema, data, null, 'addOrderItem');
+}
+
+/**
+ * Build the `items` array for PUT /api/orders/:id - used by the maker's edit
+ * window for STRUCTURAL edits (adding, removing, re-quantifying or re-pricing
+ * items). Send the FULL list, together with `baseItems`: the items as the
+ * window first showed them. The server then applies only what the maker
+ * changed, and keeps whatever takers changed in the meantime
+ * (mergeItemEdits in server/routes/order_helpers.js). Without `baseItems` the
+ * list replaces the order's items as it is, so an item missing here is deleted.
  *
  * `status` is deliberately NOT sent. When the key is absent the server keeps
  * each item's current status, read after it locks the order row

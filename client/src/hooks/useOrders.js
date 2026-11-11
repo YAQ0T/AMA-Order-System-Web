@@ -11,6 +11,7 @@ export const orderKeys = {
   all: ['orders'],
   list: (role, params) => ['orders', role, params],
   open: (params) => ['orders', 'open', params],
+  available: (params) => ['orders', 'available', params],
 };
 
 /**
@@ -59,6 +60,32 @@ export function useClaimOrder() {
   });
 }
 
+/**
+ * Completed orders no accountant has taken yet. Polled, like the takers' open
+ * orders: another accountant may take one at any moment.
+ */
+export function useAvailableForAccountingQuery({ search = '', limit, offset = 0, enabled = true } = {}) {
+  const role = useAuth((s) => s.user?.role);
+  const params = { search, limit, offset };
+
+  return useQuery({
+    queryKey: orderKeys.available(params),
+    queryFn: ({ signal }) => ordersApi.fetchAvailableForAccounting({ ...params, signal }),
+    enabled: (role === 'accounter' || role === 'admin') && enabled,
+    placeholderData: (previous) => previous,
+    refetchInterval: 15_000,
+  });
+}
+
+/** An accountant takes a completed order. Every list is refreshed whatever happens (a 409 means it is gone). */
+export function useClaimForAccounting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => ordersApi.claimForAccounting(id),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: orderKeys.all }),
+  });
+}
+
 /** Invalidate every order list regardless of role/filter. */
 export function useInvalidateOrders() {
   const queryClient = useQueryClient();
@@ -76,8 +103,61 @@ export function useCreateOrder() {
 export function useUpdateOrder() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, payload }) => ordersApi.updateOrder(id, payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: orderKeys.all }),
+    mutationFn: async ({ id, payload }) => {
+      // A status change must not overtake ticks still on their way: the
+      // server refuses a tick on a finished order, so a quick "finish" used
+      // to lose the last ticks (and the accountant saw the order without them).
+      if (payload?.status) await waitForItemWrites(id);
+      return ordersApi.updateOrder(id, payload);
+    },
+    onSuccess: (updated) => {
+      // The answer is the order as saved: show it at once, so nothing (an
+      // edit window opened right away, for instance) works from the old copy.
+      patchCachedOrder(queryClient, updated);
+      queryClient.invalidateQueries({ queryKey: orderKeys.all });
+    },
+  });
+}
+
+/** One item's quantity (takers' "edit quantity"). Only that item is sent. */
+export function useSetItemQuantity() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ orderId, name, quantity }) => {
+      await waitForItemWrites(orderId);
+      return ordersApi.setItemQuantity(orderId, name, quantity);
+    },
+    onSuccess: (updated) => {
+      patchCachedOrder(queryClient, updated);
+      queryClient.invalidateQueries({ queryKey: orderKeys.all });
+    },
+  });
+}
+
+/** Add one item (takers' "add item"). */
+export function useAddOrderItem() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ orderId, name, quantity }) => {
+      await waitForItemWrites(orderId);
+      return ordersApi.addOrderItem(orderId, { name, quantity });
+    },
+    onSuccess: (updated) => {
+      patchCachedOrder(queryClient, updated);
+      queryClient.invalidateQueries({ queryKey: orderKeys.all });
+    },
+  });
+}
+
+/** A taker brings other takers in to help. */
+export function useAddHelpers() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orderId, takerIds }) => ordersApi.addHelpers(orderId, takerIds),
+    onSuccess: (updated) => {
+      patchCachedOrder(queryClient, updated);
+      queryClient.invalidateQueries({ queryKey: orderKeys.all });
+    },
   });
 }
 
@@ -145,6 +225,15 @@ function updateCachedOrder(queryClient, orderId, updater) {
  * two quick taps in the order they were made.
  */
 const itemQueues = new Map();
+
+/**
+ * Resolves once every tick already made on this order has reached the server
+ * (whether it was saved or refused). Status changes and quantity edits wait
+ * for it, so they always land after the ticks made before them.
+ */
+export function waitForItemWrites(orderId) {
+  return (itemQueues.get(orderId) ?? Promise.resolve()).catch(() => {});
+}
 
 export function useUpdateItemStatus() {
   const queryClient = useQueryClient();

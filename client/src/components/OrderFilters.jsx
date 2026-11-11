@@ -37,11 +37,11 @@ export default function OrderFilters({
   return (
     <div className="card mb-4 flex flex-col gap-3 p-3 sm:flex-row sm:items-end">
       <div className="flex-1">
-        <label className="label" htmlFor="order-search">
+        <label className="label" htmlFor="filter-search">
           {T.search}
         </label>
         <input
-          id="order-search"
+          id="filter-search"
           type="search"
           className="input"
           placeholder={T.searchPlaceholder}
@@ -52,11 +52,11 @@ export default function OrderFilters({
 
       {statusEnabled && allowedStatuses?.length > 1 && (
         <div className="sm:w-52">
-          <label className="label" htmlFor="order-status">
+          <label className="label" htmlFor="filter-status">
             {T.filterByStatus}
           </label>
           <select
-            id="order-status"
+            id="filter-status"
             className="input"
             value={status}
             onChange={(e) => onStatusChange?.(e.target.value)}
@@ -72,11 +72,11 @@ export default function OrderFilters({
 
       {showCity && (
         <div className="sm:w-44">
-          <label className="label" htmlFor="order-city">
+          <label className="label" htmlFor="filter-city">
             {T.city}
           </label>
           <select
-            id="order-city"
+            id="filter-city"
             className="input"
             value={city || ''}
             onChange={(e) => onCityChange?.(e.target.value)}

@@ -8,6 +8,8 @@ import {
   orderTotal,
   orderTitle,
   orderDescription,
+  totalLeavesOutItems,
+  hasPrices,
 } from './format';
 
 describe('normalizeDigits', () => {
@@ -98,6 +100,27 @@ describe('price handling', () => {
       ],
     };
     expect(orderTotal(order)).toBe(29.25);
+  });
+
+  it('does not bill items marked unavailable', () => {
+    const order = {
+      Items: [
+        { price: '6.50', quantity: 1.5, status: 'collected' },
+        { price: '9.75', quantity: 2, status: 'unavailable' },
+        { price: '2', quantity: 3, status: null },
+      ],
+    };
+    expect(orderTotal(order)).toBe(15.75);
+    expect(totalLeavesOutItems(order)).toBe(true);
+    expect(totalLeavesOutItems({ Items: [{ price: '2', quantity: 1, status: 'collected' }] })).toBe(false);
+    // An unavailable item without a price changes nothing, so no note for it.
+    expect(totalLeavesOutItems({ Items: [{ price: null, quantity: 1, status: 'unavailable' }] })).toBe(false);
+  });
+
+  it('knows when there is no price to add up', () => {
+    expect(hasPrices({ Items: [{ price: null, quantity: 2 }] })).toBe(false);
+    expect(hasPrices({ Items: [{ price: '1', quantity: 2, status: 'unavailable' }] })).toBe(true);
+    expect(hasPrices({})).toBe(false);
   });
 });
 

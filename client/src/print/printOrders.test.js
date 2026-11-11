@@ -38,10 +38,26 @@ describe('buildPrintDocument', () => {
     expect(html).not.toContain('in-progress');
   });
 
-  it('computes line and grand totals from string prices', () => {
-    expect(html).toContain('9.75');    // 6.50 x 1.5
-    expect(html).toContain('19.50');   // 9.75 x 2
-    expect(html).toContain('29.25');   // grand total
+  it('computes line totals from string prices', () => {
+    expect(html).toContain('<td class="num line-total"><span dir="ltr">9.75</span>'); // 6.50 x 1.5
+    expect(html).toContain('<td class="num line-total"><span dir="ltr">19.50</span>'); // 9.75 x 2
+  });
+
+  it('leaves unavailable items out of the grand total, and says so', () => {
+    // سكر is unavailable: its line (19.50) is printed struck, not added.
+    expect(html).toContain('ILS 9.75</span>');
+    expect(html).not.toContain('29.25');
+    expect(html).toContain('لا يشمل الأصناف غير المتوفرة');
+    expect(html).toContain('.row-unavailable .line-total');
+  });
+
+  it('adds every line, with no note, when nothing is unavailable', () => {
+    const allThere = buildPrintDocument(
+      [{ ...order, Items: order.Items.map((i) => ({ ...i, status: 'collected' })) }],
+      { showPrices: true }
+    );
+    expect(allThere).toContain('ILS 29.25</span>');
+    expect(allThere).not.toContain('لا يشمل الأصناف غير المتوفرة');
   });
 
   it('marks unavailable and collected rows distinctly', () => {

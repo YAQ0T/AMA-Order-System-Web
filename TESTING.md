@@ -3,14 +3,15 @@
 ## Automated
 
 ```bash
-cd client && npm test      # 64 unit tests
+cd client && npm test      # 68 unit tests
 cd client && npm run lint
 ```
 
 Covers the pure logic that is easy to break and hard to notice: Arabic-Indic
-digit parsing, the DECIMAL-as-string price coercion, report aggregation, the
-print document (RTL, LTR isolation, HTML escaping, status labels), and the
-Arabic translation of server errors, order history and notifications.
+digit parsing, the DECIMAL-as-string price coercion, order totals (unavailable
+items left out), report aggregation, the print document (RTL, LTR isolation,
+HTML escaping, status labels, the total and its note), and the Arabic
+translation of server errors, order history and notifications.
 
 ## Testing the UI without a database
 
@@ -57,15 +58,15 @@ Against the mock, driving the real UI:
 | Auth | Login, signup, pending-approval redirect, logout, session restore on reload |
 | Role guards | Taker asking for `/admin/users`, `/maker/archived`, `/accounter/erp` all bounce to `/taker` |
 | Deep links | `/maker/archived` survives a hard refresh |
-| Maker | Create active + archived, validation (no taker/accounter blocks an active order), Ctrl+Enter, F3, form reset |
+| Maker | Create active + archived, validation (no taker, no city or an empty quantity blocks an active order), Ctrl+Enter, F3, form reset |
 | Maker | Edit order: city, price, quantity — taker's item statuses survive intact |
-| Maker | Archived tab: city grouping in canonical order, multi-select, bulk send assigns taker + accounter and flips to pending |
+| Maker | Archived tab: city grouping in canonical order, multi-select, bulk send assigns takers and flips to pending (no accountant to pick) |
 | Taker | Item status marking — single, rapid (5 taps, 0ms apart), and mixed collected/unavailable |
 | Taker | Add item, edit quantity, duplicate name rejected, existing statuses preserved |
 | Taker | No price column (server strips the field) |
 | Lifecycle | pending → in-progress → completed → entered_erp across three roles |
 | Lifecycle | Completed orders vanish from the taker even with `status=all` |
-| Accounter | Completed and ERP tabs, send-to-ERP moves the order between them |
+| Accounter | «طلباتي», «جاهزة للمحاسبة» (with its count) and ERP tabs; taking an order moves it to «طلباتي»; send-to-ERP moves it on |
 | Admin | Stats, approve user (UI updates without refresh), user table, activity logs |
 | Reports | Paged through all 47 orders, aggregated sold/unavailable/takers/customers |
 | Print | Screenshotted: Arabic shaped, RTL table, numbers LTR-isolated, red strikethrough for unavailable, page breaks |
@@ -78,8 +79,9 @@ Against the mock, driving the real UI:
 
 ## Verified against the real server and MySQL 26.7
 
-Run with `npm run test:integration` in `server/` — **checks across seven suites**
-(api 66, concurrency 34, telegram 45, open-orders 77, backup 47, security 113, order-marks 42) - **424 in all**.
+Run with `npm run test:integration` in `server/` — **checks across eight suites**
+(api 66, concurrency 34, telegram 45, open-orders 77, backup 47, security 113, order-marks 42, workflow 116) - **540 in all**.
+One suite alone: `npm run test:integration -- workflow`.
 It creates a throwaway database, runs everything against the real routes and
 real MySQL, and drops it afterwards — your own database is never touched. Test
 servers also write their backups and order logs to a throwaway folder, and
@@ -138,6 +140,7 @@ never take automatic backups.
 | Marks on Telegram | Urgent messages start with 🔴 and say «طلب ضروري»; online ones say «طلب أونلاين» |
 | **Makers see only their own** | Another maker sees none of them (maker list, general list, title suggestions) and gets 403 editing, changing status, ticking or deleting; the admin sees all and can delete any (this used to fail) |
 | **Online link script** | `scripts/tunnel.js`: token found in a pasted command or alone; status and test on a computer without cloudflared; test against the live domain reports nameservers, addresses, Cloudflare error 530 (no tunnel connected) and the missing http-to-https redirect; the Windows administrator commands checked with PowerShell's parser |
+| **Demo copy (`Demo AMA`)** | Started on Windows: creates `ama_order_system_demo`, serves on 6060 with Telegram off; the sample data checked through the API - 7 orders in every state (online + open, the admin's urgent one, assigned, in progress with taker1 helping taker2, completed and taken by acc1, completed with one item unavailable and waiting for any accountant, a draft), maker2 sees only theirs, the urgent order heads taker1's open list, acc1 and acc2 both see the waiting one under «جاهزة للمحاسبة», "newbie" cannot log in before approval, the overview counts are right; the real database untouched (same users and orders before and after); stopped with its window |
 | **Online link script on a pretend Mac and Windows PC** | `node scripts/tunnel.test.js` (31 checks, nothing installed or changed): **Mac** - connect with Homebrew, and without it (Cloudflare's .tgz for Apple silicon into `/usr/local/bin`, temp files removed); Stop then Remove (cloudflared's own uninstall gives up on a stopped tunnel - loaded again first); Remove when that fails anyway; Start after Stop and when loaded-but-exited; a wrong password; a paste without a token; the log with the token hidden; Update with and without Homebrew, and when already newest; a service pointing at a deleted cloudflared. **Windows** - connect with winget (no questions, one permission prompt) and without it (the .msi, switches bare for msiexec, deleted afterwards); choosing No at the prompt; cloudflared's own error shown when the install fails; Stop / Start / Remove; already an administrator; the event log under "Cloudflared", token hidden; Update in one prompt; the service's program path read without the token. **Test's advice** for 530 / 502 / 404, another computer, no https redirect, a year-old cloudflared. **For real on Windows**: the cmd.exe and Start-Process quoting with spaces in every path, a token-like argument intact, the exit code passed on. Putting back four old bugs (the Mac removal, token hiding, quoted msiexec switches, the event-log name) fails 7 checks. The names cloudflared uses (service "Cloudflared", `/Library/LaunchDaemons/com.cloudflare.cloudflared.plist`, its log files, the install folder `Program Files (x86)\cloudflared`, winget id `Cloudflare.cloudflared`) were checked against cloudflared's source code and Cloudflare's docs |
 | **Launcher (Windows)** | First start against a database that does not exist yet: creates it and starts. Start with nothing running (installs/builds as needed, waits for the database, prints the phone address without the VirtualBox adapter); start when already running; start with MySQL unreachable (clear message, nothing left running); stop; restore cancelled (nothing changed) |
 | **Error answers** | A database fault (a table hidden for a moment) answers `{"error":"Server error"}` with no SQL, table or database name - the old code sent `Table 'ama_order_system_test.notifications' doesn't exist`; a broken JSON body or a bad `%` escape gets a short JSON 400, not Express's HTML page with the stack trace; an unknown `/api` address a JSON 404; a body over 100 KB a 413. With the fixes turned off, 16 checks fail |
@@ -147,6 +150,16 @@ never take automatic backups.
 | **Description, taker limits** | No description is stored as none (not "Order with 1 items"); an emptied box clears it; an edit that leaves it out keeps it; the assigned taker gets 403 changing the customer, description or city but can still add an item, and the maker's price survives |
 | Admin overview and logs | Recent activity carries each person's id (without it the app showed zeros); every entry of the full log has an id and a User (the app showed nothing); a deactivated account is not "waiting for approval" |
 | **Browser pass, production build** | On a throwaway database, with the new Content-Security-Policy: login; a maker creates an online order (open to any taker by default) and cannot see the other maker's order; print (styles and the Arabic font load, zero policy violations); a taker at phone width sees the admin's urgent order first, in red, and a 5-word item name on one line, takes the online order and ticks an item; the admin overview shows the real numbers; the full log lists order changes in Arabic; a maker clears a description in the edit window. No errors in the server log |
+| **Workflow (Nov 2026)** | `workflow.test.mjs`, 116 checks with a fake Telegram: an order goes out with no accountant; no city -> 400 (a draft may wait for one, but cannot be sent out without it); an empty quantity -> 400 |
+| Taker writes, one item at a time | Quantity change and added item each touch one row; a taker's stale quantity can no longer overwrite a colleague's newer one; a duplicate name is refused; takers cannot change, add to or reopen a completed order (409) |
+| Maker's edit window | Sends the list it started from (`baseItems`): a quantity the maker did not touch keeps the taker's newer value, an item a taker added meanwhile stays, a re-quantified item loses its tick |
+| **Accountants take completed orders** | Cannot be taken before completion; every linked accountant gets one "🧾 ready for accounting" (unavailable item struck, no prices); both see it under «available»; the first to take it gets it, the second gets 409 ORDER_TAKEN; the messages are edited to "you took it" / "taken by acc1"; the other accountant's in-app offer stops counting as unread (also when the order is sent back or deleted first); **2 accountants tapping twice at once, 15 orders: exactly one winner each time** |
+| Helpers | The assigned taker adds others (Telegram "🤝" to them, the maker told in the app, the history records it); helpers tick, change quantities and finish; not on a completed order; add-only |
+| Sending back | The maker changes a quantity of a completed order: back to «in progress» for the same takers, changed item unticked, the others kept; each taker gets ONE "sent back to you" message; the accountant who had it is told and gets it back directly when completed; a price-only change does not send it back; the status menu sends it back too |
+| **Editing after ERP** | The order's maker may save an order entered into ERP (it was a 409); a save that changes nothing leaves no trace and tells nobody; a new customer name and price keep it in ERP, with «Changed after it was entered into ERP» on top of the history, the name and **the price change** below it; acc1 (who entered it) is told in the app and once on Telegram without prices, acc2 and the takers hear nothing (not in the app either); a price change shows in the maker's and admin's history but not in a taker's copy (which still shows the tick); a changed quantity sends it back to the same takers (one "sent back" message each, acc1 told it comes back), finished again it goes straight to acc1, who enters it again; the status menu can put it back to «completed» for acc1; another maker 403, its taker 409 |
+| Freshness | `Cache-Control: no-store` on every `/api` answer |
+| Mutation checks | Each fix was taken out once to prove a check guards it: without the claim's row lock the 15-order race goes wrong in **15 of 15** rounds; a merge that ignores what the window started from writes the old quantity back (1 check fails), one that drops items added meanwhile deletes the taker's item (2), one that keeps the tick on a re-quantified item fails 2; without the in-app offer clean-up 3 fail. Editing after ERP: making ERP final for the maker again fails 7; not logging prices 2; showing price lines to takers 1; no ERP line / accountant notice 4; counting a save that changes nothing as a change 2; pinging takers about a finished order 1; no send-back after ERP 5 |
+| **Browser pass, Nov 2026 (demo copy)** | Production build: the maker's form starts with no city and an empty quantity, and saving says which is missing; acc2 takes a completed order from «جاهزة للمحاسبة»; the maker edits it, gets «رجع الطلب للمجهّزين», it shows «قيد التنفيذ» with the changed item unticked and the history in Arabic; taker1 at phone width (bigger text, full name in the top bar, buttons on their own row) gets «أعاد maker1 إليك الطلب #6 للتعديل», changes the quantity, adds taker2 as a helper and finishes; acc2 gets it straight back with the taker's quantity, the unavailable line struck and left out of the total. No console errors |
 | **Scripts** | `start-mock.cmd` brings up the mock and the client (login works through the proxy); `stop-mock.cmd` stops both, closes the windows, and leaves the process in `.ama_runtime/server.pid` alone; `launch.js` usage / stop / autostart / restore with no answer (nothing changed); `tunnel.js` status / test / menu, and the Cloudflare double-click file; `db:create` (twice - the second leaves it alone), `db:check`, `db:backup` and `npm run dev` (Telegram off) on a throwaway database; every `.sh` and `.command` file passes `bash -n` |
 
 ---
@@ -157,6 +170,11 @@ These cannot be checked without your real environment. Roughly in order of risk.
 
 ### 0. The new things, on your machines
 
+0. **The November changes, with real people (try them on `Demo AMA` first).**
+   An accountant takes a finished order from «جاهزة للمحاسبة»; a taker adds a
+   colleague with «إضافة مجهّزين» and both work the order; the maker changes a
+   quantity of a finished order and it comes back to the same takers; the text
+   on the takers' phones is now big enough to read.
 1. **Open orders on real phones.** Create an order with «مفتوح لأي مجهّز».
    Two takers' phones should get "🔓 طلب مفتوح". One taps «خذ الطلب» in the app:
    the other phone's message should change to "تم أخذ الطلب".
@@ -187,8 +205,10 @@ then:
 3. As the maker, create an order assigned to both. Each phone should get the
    message with the phone **locked** and Telegram **closed** — that is the case
    web push kept failing.
-4. Link an **accountant** the same way, then have a taker finish an order
-   assigned to that accountant. The accountant should get "جاهز للإدخال على ERP".
+4. Link **two accountants** the same way, then have a taker finish an order.
+   Both should get "🧾 طلب جاهز للمحاسبة". One taps «خذ الطلب» in the app: the
+   other's message should change to "أخذه …", and the order should be in the
+   first one's «طلباتي».
 5. If **فتح تيليغرام** does nothing on a phone, try the "لم يُفتح التطبيق؟" link
    under it and tell me which phone it was. If the page does not load on the
    phone at all, Windows Firewall is blocking port 6001.
@@ -220,11 +240,10 @@ the table above). What is left is the human version: two phones on your
 network, same order, both ticking different items as fast as they can. It
 should simply work. If it does not, that is a real bug — tell me.
 
-One limitation remains, and it is much rarer: two people making a
-**structural** edit to the same order at the same moment — for example both
-adding an item within the same second. Those still go through `PUT`, which
-replaces the whole item list, so one of the two additions can be lost. Ticks are
-not affected. See the end of this file.
+The same goes for quantities and added items since November 2026: takers send
+them one item at a time, and the maker's edit window applies only what the maker
+changed. Two people editing the **same** item at the same moment still means the
+later one wins — for that one item only.
 
 ### 5. Web push — nothing to test
 
@@ -279,11 +298,9 @@ IDs**. That was the root of both bugs found so far. Where things stand:
 | Two takers ticking the same order undo each other | **Fixed** — ticks use `PATCH /api/orders/:id/items/status`, a single-row update. 0 of 20 lost, against 20 of 20 before |
 | A maker's edit overwrites ticks made while the edit window was open | **Fixed** — structural edits no longer send `status`, so the server keeps the live value |
 | `PATCH /api/items/:itemId/status` let any user change any order | **Fixed** — same authorization as the new endpoint |
-| Two people make a **structural** edit to one order in the same second | **Still possible.** Each `PUT` carries the full list, so one person's added item can disappear. Rare, and ticks are unaffected |
-| Item `createdAt` is reset on every structural save | Still true. Nothing in the app reads it |
+| Two people make a **structural** edit to one order in the same second | **Fixed (Nov 2026).** Takers change quantities and add items through single-item endpoints; the maker's window sends `baseItems` and the server merges only the maker's own changes into the current list, under the row lock. Clients that do not send `baseItems` (older ones) still replace the whole list |
+| Item `createdAt` is reset on every structural save | Still true for the maker's edit window. Nothing in the app reads it |
 
-The remaining fix is to make `PUT` diff the incoming list against the existing
-rows and `update` / `create` / `destroy` only what changed, keyed by name. That
-would close the structural-edit race, keep ids stable, and make the order
-history quieter. It is a rewrite of the server's main write path, so it is
-worth doing only if the structural-edit race turns out to happen in practice.
+What is left of the rewrite: the maker's save still deletes and recreates the
+item rows (with the merged values), so item ids still change on such a save.
+Nothing depends on them — items are matched by name everywhere.

@@ -7,7 +7,7 @@ import Pagination from '../../components/Pagination';
 import { ConfirmDialog, EmptyState, ErrorState, Modal, Spinner, Ltr } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { useOrdersQuery, useUpdateOrder, useDeleteOrder } from '../../hooks/useOrders';
-import { useTakers, useAccounters } from '../../hooks/useUsers';
+import { useTakers } from '../../hooks/useUsers';
 import { printOrders } from '../../print/printOrders';
 import { T, CITIES } from '../../lib/labels';
 import { formatDate, orderTitle } from '../../lib/format';
@@ -38,13 +38,11 @@ function groupByCity(orders) {
 
 function SendSheet({ open, onClose, onSend, count, busy }) {
   const { data: takers = [] } = useTakers(open);
-  const { data: accounters = [] } = useAccounters(open);
   const [takerIds, setTakerIds] = useState([]);
   // Open to any taker by default, as in the order form.
   const [openToAll, setOpenToAll] = useState(true);
-  const [accounterId, setAccounterId] = useState('');
-
-  const canSend = (openToAll || takerIds.length > 0) && accounterId !== '';
+  // No accountant to pick: accountants take an order once it is completed.
+  const canSend = openToAll || takerIds.length > 0;
 
   return (
     <Modal open={open} onClose={onClose} title={`${T.sendOrders} (${count})`}>
@@ -94,24 +92,6 @@ function SendSheet({ open, onClose, onSend, count, busy }) {
         )}
       </div>
 
-      <div className="mb-6">
-        <label className="label" htmlFor="send-accounter">
-          {T.accounter}
-        </label>
-        <select
-          id="send-accounter"
-          className="input"
-          value={accounterId}
-          onChange={(e) => setAccounterId(e.target.value)}
-        >
-          <option value="">{T.selectAccounter}</option>
-          {accounters.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.username}
-            </option>
-          ))}
-        </select>
-      </div>
 
       <div className="flex justify-end gap-2">
         <button type="button" className="btn-secondary" onClick={onClose} disabled={busy}>
@@ -121,7 +101,7 @@ function SendSheet({ open, onClose, onSend, count, busy }) {
           type="button"
           className="btn-primary"
           disabled={!canSend || busy}
-          onClick={() => onSend({ takerIds: openToAll ? [] : takerIds, openToAll, accounterId: Number(accounterId) })}
+          onClick={() => onSend({ takerIds: openToAll ? [] : takerIds, openToAll })}
         >
           {busy ? <Spinner className="h-4 w-4" /> : null}
           {T.send}
@@ -180,7 +160,7 @@ export default function MakerArchived() {
     });
   };
 
-  const send = async ({ takerIds, openToAll, accounterId }) => {
+  const send = async ({ takerIds, openToAll }) => {
     setSending(true);
     try {
       // The server has no bulk status endpoint, so this is one PUT per order.
@@ -192,7 +172,6 @@ export default function MakerArchived() {
           payload: {
             status: 'pending',
             assignedTakerIds: takerIds,
-            accounterId,
             ...(openToAll ? { openToAll: true } : {}),
           },
         });

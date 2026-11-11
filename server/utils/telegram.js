@@ -188,7 +188,7 @@ function openOrderClosedMessage(orderId, details, { takenBy, isRecipient }) {
  * notification would have to decide whether unavailable items count - a
  * billing rule that belongs in the app, not in a chat message.
  */
-function orderReadyForErpMessage(order) {
+function readyDetails(order) {
     const items = order.Items || [];
     const unavailable = items.filter((i) => i.status === 'unavailable');
     const takers = (order.AssignedTakers || []).map((t) => t.username).filter(Boolean);
@@ -206,8 +206,6 @@ function orderReadyForErpMessage(order) {
         + ':';
 
     return [
-        `✅ <b>طلب جاهز للإدخال على ERP ${ltr(`#${order.id}`)}</b>`,
-        '',
         marksLine(order),
         `👤 الزبون: <b>${esc(order.title || '—')}</b>`,
         `📍 المدينة: ${esc(order.city || '—')}`,
@@ -215,7 +213,79 @@ function orderReadyForErpMessage(order) {
         '',
         count,
         ...lines,
-    ].filter((l) => l !== null).join('\n');
+    ].filter((l) => l !== null);
+}
+
+function orderReadyForErpMessage(order) {
+    return [`✅ <b>طلب جاهز للإدخال على ERP ${ltr(`#${order.id}`)}</b>`, '', ...readyDetails(order)].join('\n');
+}
+
+/**
+ * A completed order no accountant has taken yet, offered to every accountant:
+ * the first to take it in the app gets it (POST /api/orders/:id/accounting-claim).
+ */
+function readyForAccountingMessage(order) {
+    return [
+        `${urgent(order)}🧾 <b>طلب جاهز للمحاسبة ${ltr(`#${order.id}`)}</b>`,
+        'أول محاسب يأخذه من النظام يصبح له.',
+        '',
+        ...readyDetails(order),
+    ].join('\n');
+}
+
+/** What an accountant's "ready" message is edited into once the order is no longer up for grabs. */
+function readyClosedMessage(orderId, details, { takenBy, isRecipient, reopened }) {
+    let header;
+    if (takenBy && isRecipient) header = `✅ <b>أخذتَ الطلب ${ltr(`#${orderId}`)}</b> — تجده في «طلباتي».`;
+    else if (takenBy) header = `🔒 <b>تم أخذ الطلب ${ltr(`#${orderId}`)}</b> — أخذه ${esc(takenBy)}`;
+    else if (reopened) header = `🔁 <b>أُعيد الطلب ${ltr(`#${orderId}`)} للتجهيز</b> — سيظهر من جديد عند اكتماله.`;
+    else header = `🚫 <b>الطلب ${ltr(`#${orderId}`)} لم يعد متاحاً</b>`;
+    return [header, '', ...details].join('\n');
+}
+
+/** A taker on an order added another taker to help with it. */
+function orderHelperMessage(order, adder) {
+    return [
+        `${urgent(order)}🤝 <b>أضافك ${esc(adder?.username || '—')} لتجهيز الطلب ${ltr(`#${order.id}`)}</b>`,
+        'تجده في «طلباتي».',
+        '',
+        ...orderDetails(order, null),
+    ].join('\n');
+}
+
+/** The maker sent a finished order back to its takers, changed. */
+function orderReopenedMessage(order, editor) {
+    return [
+        `${urgent(order)}🔁 <b>أُعيد إليك الطلب ${ltr(`#${order.id}`)} للتعديل</b>`,
+        'الأصناف التي تغيّرت بلا علامة: راجعها، ثم أنهِ الطلب من جديد.',
+        '',
+        ...orderDetails(order, editor),
+    ].join('\n');
+}
+
+/** For the accountant who had taken the order: it went back to the takers, and comes back to them when done. */
+function orderReopenedForAccountantMessage(order, editor) {
+    return [
+        `🔁 <b>أُعيد الطلب ${ltr(`#${order.id}`)} للتجهيز</b>`,
+        `عدّله ${esc(editor?.username || '—')}، وسيعود إليك عند اكتماله.`,
+        '',
+        `👤 الزبون: <b>${esc(order.title || '—')}</b>`,
+    ].join('\n');
+}
+
+/**
+ * For the accountant who entered the order into ERP: its maker (or the admin)
+ * changed it afterwards, so ERP may need the same change. What changed is in
+ * the order's history in the app - the message only points there (no prices
+ * in chat, as everywhere else).
+ */
+function orderChangedAfterErpMessage(order, editor) {
+    return [
+        `✏️ <b>تعديل على طلب مُدخل على ERP ${ltr(`#${order.id}`)}</b>`,
+        `عدّله ${esc(editor?.username || '—')} بعد إدخاله على ERP. التعديلات مسجّلة في سجل الطلب داخل النظام — راجعها وعدّل ERP إذا لزم.`,
+        '',
+        `👤 الزبون: <b>${esc(order.title || '—')}</b>`,
+    ].join('\n');
 }
 
 const HELP_TEXT = [
@@ -331,30 +401,24 @@ async function deliverTo(users, buildText, { path = '/taker' } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Open orders
+// "First to take it": open orders for takers, completed orders for accountants
 
-// The messages sent for each open order, so they can be edited to say "taken"
-// once someone takes it. Kept in memory only: after a server restart, older
-// open-order messages simply stay as they were - the app is the source of
-// truth and refuses a second taker either way.
+// The messages sent for each offer, so they can be edited to say "taken" once
+// someone takes it. Kept in memory only: after a server restart, older
+// messages simply stay as they were - the app is the source of truth and
+// refuses a second taker (or accountant) either way.
 const openBroadcasts = new Map(); // orderId -> { details, messages: [{ userId, chatId, messageId }] }
+const readyBroadcasts = new Map(); // the same, for accountants
 
-/**
- * Tell every approved, linked taker that an order is open. Resolves to the
- * number of takers it reached.
- */
-async function broadcastOpenOrder(order, maker) {
+/** Send `text` to every approved, linked user with `role`; remember the messages. Resolves to how many it reached. */
+async function broadcastToRole(role, order, text, details, path, store) {
     if (!enabled()) return 0;
     const { User } = models();
-    const takers = await User.findAll({
-        where: { role: 'taker', isApproved: true },
-        attributes: ['id', 'username'],
-    });
-    const { linked } = await partitionByTelegram(takers);
+    const users = await User.findAll({ where: { role, isApproved: true }, attributes: ['id', 'username'] });
+    const { linked } = await partitionByTelegram(users);
     if (linked.length === 0) return 0;
 
-    const text = openOrderMessage(order, maker);
-    const button = openButton('/taker/open');
+    const button = openButton(path);
     const messages = [];
     await Promise.all(
         linked.map(async ({ user, chatId }) => {
@@ -362,38 +426,64 @@ async function broadcastOpenOrder(order, maker) {
             if (sent && sent.message_id) messages.push({ userId: user.id, chatId, messageId: sent.message_id });
         })
     );
-    if (messages.length) {
-        openBroadcasts.set(Number(order.id), { details: orderDetails(order, maker), messages });
-    }
+    if (messages.length) store.set(Number(order.id), { details, messages });
     return messages.length;
 }
 
-/**
- * The order is no longer open: edit the messages broadcastOpenOrder sent.
- * `takenBy` is the taker who took it ({ id, username }), or null.
- */
-async function closeOpenOrder(orderId, takenBy = null) {
-    const entry = openBroadcasts.get(Number(orderId));
+/** Edit every message of an offer; render(entry, userId) gives the new text. */
+async function closeBroadcast(store, orderId, render) {
+    const entry = store.get(Number(orderId));
     if (!entry) return;
-    openBroadcasts.delete(Number(orderId));
+    store.delete(Number(orderId));
     await Promise.all(
         entry.messages.map(({ userId, chatId, messageId }) =>
             // No reply_markup: the edit drops the "open the system" button.
             api('editMessageText', {
                 chat_id: chatId,
                 message_id: messageId,
-                text: openOrderClosedMessage(orderId, entry.details, {
-                    takenBy: takenBy?.username || null,
-                    isRecipient: Boolean(takenBy) && takenBy.id === userId,
-                }),
+                text: render(entry, userId),
                 parse_mode: 'HTML',
                 disable_web_page_preview: true,
             }).catch((err) => {
                 // Deleted by the user, or too old to edit. Nothing to do.
-                console.warn(`[telegram] could not update open-order message in ${chatId}: ${err.message}`);
+                console.warn(`[telegram] could not update an offer message in ${chatId}: ${err.message}`);
             })
         )
     );
+}
+
+/** Tell every approved, linked taker that an order is open. Resolves to the number reached. */
+function broadcastOpenOrder(order, maker) {
+    return broadcastToRole('taker', order, openOrderMessage(order, maker), orderDetails(order, maker), '/taker/open', openBroadcasts);
+}
+
+/**
+ * The order is no longer open: edit the messages broadcastOpenOrder sent.
+ * `takenBy` is the taker who took it ({ id, username }), or null.
+ */
+function closeOpenOrder(orderId, takenBy = null) {
+    return closeBroadcast(openBroadcasts, orderId, (entry, userId) => openOrderClosedMessage(orderId, entry.details, {
+        takenBy: takenBy?.username || null,
+        isRecipient: Boolean(takenBy) && takenBy.id === userId,
+    }));
+}
+
+/** Offer a completed order to every approved, linked accountant. Resolves to the number reached. */
+function broadcastReadyForAccounting(order) {
+    return broadcastToRole('accounter', order, readyForAccountingMessage(order), readyDetails(order), '/accounter/available', readyBroadcasts);
+}
+
+/**
+ * The completed order is no longer up for grabs: an accountant took it
+ * (`takenBy`), the maker sent it back to the takers (`reopened`), or it was
+ * archived, entered into ERP or deleted.
+ */
+function closeReadyForAccounting(orderId, takenBy = null, { reopened = false } = {}) {
+    return closeBroadcast(readyBroadcasts, orderId, (entry, userId) => readyClosedMessage(orderId, entry.details, {
+        takenBy: takenBy?.username || null,
+        isRecipient: Boolean(takenBy) && takenBy.id === userId,
+        reopened,
+    }));
 }
 
 // ---------------------------------------------------------------------------
@@ -513,7 +603,7 @@ async function pollLoop() {
 async function start() {
     if (!enabled()) {
         console.log(switchedOff()
-            ? '[telegram] switched off (TELEGRAM=off, as the dev scripts set it) - no Telegram messages from this copy.'
+            ? '[telegram] switched off (TELEGRAM=off: a development or demo copy) - no Telegram messages from this copy.'
             : '[telegram] TELEGRAM_BOT_TOKEN not set - Telegram notifications are disabled.');
         return;
     }
@@ -550,7 +640,13 @@ module.exports = {
     notifyUnlinked,
     broadcastOpenOrder,
     closeOpenOrder,
+    broadcastReadyForAccounting,
+    closeReadyForAccounting,
     orderAssignedMessage,
     orderUpdatedMessage,
     orderReadyForErpMessage,
+    orderHelperMessage,
+    orderReopenedMessage,
+    orderReopenedForAccountantMessage,
+    orderChangedAfterErpMessage,
 };

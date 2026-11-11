@@ -110,8 +110,26 @@ export function lineTotal(item) {
   return price * qty;
 }
 
+/**
+ * What the order comes to. Items marked unavailable did not go out, so they
+ * are not billed: they stay in the list (their line total struck through)
+ * but are left out of the sum - the same rule the reports use.
+ */
 export function orderTotal(order) {
-  return (order?.Items || []).reduce((sum, item) => sum + lineTotal(item), 0);
+  return (order?.Items || []).reduce(
+    (sum, item) => (item?.status === 'unavailable' ? sum : sum + lineTotal(item)),
+    0
+  );
+}
+
+/** True when the order has an unavailable item with a price - the total then needs its note. */
+export function totalLeavesOutItems(order) {
+  return (order?.Items || []).some((item) => item?.status === 'unavailable' && lineTotal(item) > 0);
+}
+
+/** Whether there is any price to add up at all (takers' own items have none). */
+export function hasPrices(order) {
+  return (order?.Items || []).some((item) => lineTotal(item) > 0);
 }
 
 export function orderTitle(order) {

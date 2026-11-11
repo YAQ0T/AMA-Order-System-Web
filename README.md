@@ -10,6 +10,7 @@ AMA-Order-System-Web/
 ├── Restore AMA (Windows).cmd   restore a backup       (Mac: Restore AMA (Mac).command)
 ├── Autostart AMA (Windows).cmd start at login on/off  (Mac: Autostart AMA (Mac).command)
 ├── Cloudflare AMA (Windows).cmd the online link menu  (Mac: Cloudflare AMA (Mac).command)
+├── Demo AMA (Windows).cmd      a safe demo copy, port 6060 (Mac: Demo AMA (Mac).command)
 ├── ONLINE-ACCESS.md  reaching the system from anywhere (Cloudflare Tunnel), in Arabic
 ├── CLOUDFLARE.md     the tunnel step by step, screen by screen, on the Mac and on Windows (Arabic)
 ├── TESTING.md        what is tested and how
@@ -31,7 +32,8 @@ AMA-Order-System-Web/
 | **Stop AMA (Windows).cmd** / **Stop AMA (Mac).command** | بيطفي النظام |
 | **Restore AMA (Windows).cmd** / **Restore AMA (Mac).command** | بيرجّع البيانات من نسخة احتياطية (بياخد نسخة أمان من الوضع الحالي قبل أي تغيير) |
 | **Autostart AMA (Windows).cmd** / **Autostart AMA (Mac).command** | بيشغّل/بيلغي تشغيل النظام لحاله مع تسجيل الدخول للجهاز |
-| **Cloudflare AMA (Windows).cmd** / **Cloudflare AMA (Mac).command** | الرابط الأونلاين: ربط، تشغيل، إيقاف، فحص كامل، سجل، إزالة (قائمة بالأرقام) |
+| **Cloudflare AMA (Windows).cmd** / **Cloudflare AMA (Mac).command** | الرابط الأونلاين: ربط، تشغيل، إيقاف، فحص كامل، سجل، إزالة، تحديث (قائمة بالأرقام) — بالتفصيل بـ [CLOUDFLARE.md](CLOUDFLARE.md) |
+| **Demo AMA (Windows).cmd** / **Demo AMA (Mac).command** | **نسخة تجريبية** للتجربة بأمان: قاعدة بيانات لحالها، على `http://localhost:6060`، تيليغرام مطفي، فيها حسابات وطلبات جاهزة (الحسابات بتطلع بالشباك). النظام الحقيقي وبياناته ما بيتأثروا. بتوقف لما تسكّر الشباك |
 
 **الوصول من أي مكان بالعالم** (والنظام على جهاز الشركة): شوف **[ONLINE-ACCESS.md](ONLINE-ACCESS.md)** — رابط https ثابت عن طريق Cloudflare Tunnel، بدون فتح بورتات، وفيه كمان نقل النظام بين الماك والويندوز وإيقاف النظام القديم.
 
@@ -180,9 +182,9 @@ Four roles, same as the Flutter app:
 
 | Role | Arabic | Can do |
 |---|---|---|
-| maker | منشئ الطلبات | Create orders (for chosen takers, or open to any taker; optionally marked **online**, shown blue), manage active + archived, bulk-send archived, print, reports. **Sees only their own orders** |
-| taker | المجهّز | See assigned orders, take open ones, mark items collected/unavailable, add items, change quantities, advance status. Not the customer, description or city (403) |
-| accounter | المحاسب | See completed orders, send to ERP, print |
+| maker | منشئ الطلبات | Create orders (for chosen takers, or open to any taker; optionally marked **online**, shown blue), manage active + archived, bulk-send archived, **edit their own orders at any stage — also after ERP — with every change in the history**, send a finished order back to its takers, print, reports. **Sees only their own orders** |
+| taker | المجهّز | See assigned orders, take open ones, **bring in other takers to help**, mark items collected/unavailable, add items, change quantities, advance status. Not the customer, description or city (403) |
+| accounter | المحاسب | **Take completed orders** (first come, first served — nobody picks the accountant), send to ERP, print |
 | admin | المدير | Stats, approve / deactivate users, set passwords, **all** orders (create, edit, delete), activity logs, reports, backups. Orders the admin creates are **urgent**: red, first in the takers' lists, 🔴 on Telegram |
 
 Order lifecycle: `pending` → `in-progress` → `completed` → `entered_erp`, with
@@ -217,6 +219,82 @@ took it. The maker is told in the app.
 - The edits to old Telegram messages are remembered in memory only: after a
   server restart, earlier "open order" messages are simply left as they were.
   The app is what counts — a second taker always gets "someone beat you to it".
+
+### Accountants take completed orders (November 2026)
+
+Nobody picks an accountant when creating an order any more — the field is gone
+from every form. The accountant's turn comes **after the takers finish**, on the
+same first-come rule as open orders:
+
+- When an order with no accountant is completed, every accountant sees it under
+  **جاهزة للمحاسبة** (with a count on the tab), gets an in-app notification, and
+  — if linked — a "🧾 طلب جاهز للمحاسبة" Telegram message.
+- The first to tap **خذ الطلب** gets it (`POST /api/orders/:id/accounting-claim`,
+  row-locked like the taker claim; the others get `409 ORDER_TAKEN`). It moves to
+  their «طلباتي» until they send it to ERP; the other accountants' Telegram
+  messages are edited to say who took it, and their in-app offers are marked read
+  so the bell stops counting an order they can no longer take.
+- Orders list a violet **بانتظار محاسب** chip until someone takes them.
+- If the maker sends the order back and it is completed again, it goes straight
+  back to the accountant who had taken it (not offered again).
+- Older orders that already have an accountant are unchanged.
+
+### Takers bring in helpers
+
+A taker on an order can tap **إضافة مجهّزين** and add other approved takers
+(`POST /api/orders/:id/helpers`). Helpers become full takers on that order: they
+see it in «طلباتي», tick items, change quantities, add items and finish it. It is
+**add-only** — removing someone stays the maker's (or admin's) call in the edit
+window. The added takers get an in-app notification and a Telegram message, the
+maker is told in the app, and the history records who added whom. Not possible
+once the order is completed.
+
+### Editing at any stage, and sending a finished order back
+
+The maker who created an order can **always** edit it — also once it is
+completed, and also after it was **entered into ERP** (the admin can edit any
+order). Nobody else can: another maker gets 403, its takers 409 once it is
+finished. **Every change stays in the order's history** («عرض السجل», and the
+admin's full log): customer, city, description, marks, takers, items, quantities,
+ticks, status — and **prices**, which were not recorded at all before. Takers
+never see prices, so price lines are left out of their copy of the history
+(they carry the marker `[price]`; see `buildOrderIncludes`).
+
+- **A finished order whose items change goes back to the same takers.** If the
+  save changes what the takers prepare — an item added, removed or
+  re-quantified — the order goes back as «قيد التنفيذ»: the changed items lose
+  their tick, the untouched ones keep theirs, the takers get "🔁 أُعيد إليك
+  الطلب" (instead of "edited"), and the accountant who had it is told it returns
+  to them when completed (then they enter it into ERP again). Choosing «قيد
+  الانتظار» / «قيد التنفيذ» in the status menu sends it back too.
+- **Changing only prices, the customer name, city or description** does not send
+  it back. After ERP the order stays «تم الإدخال في ERP», the history gets a line
+  «عُدّل بعد إدخاله على ERP» on top of the changes, and the accountant who
+  entered it is told in the app and on Telegram, so ERP can be corrected. The
+  status menu can also put it back to «مكتمل» for that accountant to enter again.
+- Its takers are not pinged about edits to an order they have finished.
+
+### No defaults in the order form
+
+The city starts empty (no Nablus by default) and an item's quantity starts empty
+(no 1 by default). Saving without them shows a toast naming what is missing
+(«اختر مدينة الطلب قبل الحفظ», «أدخل كمية الصنف «…»»), and the server refuses an
+order without a city (`400 Choose a city`) — except a draft (archived), which may
+wait for its city until it is sent out.
+
+### Phones: bigger text
+
+Below 640 px wide the root font size is 18 px instead of 16 (`index.css`). All
+sizes are in rem, so text, buttons and spacing grow together. The top bar then
+shows "username — role" instead of the logo and app name, and an order card puts
+its buttons on their own row so the customer name and chips keep the full width.
+
+### Totals leave out unavailable items
+
+The grand total on screen and in print counts only what went out: an item marked
+«غير متوفر» stays in the list with its line total struck through, and a note under
+the total says unavailable items are not included. The reports already worked
+this way. (Before, the total still billed unavailable items.)
 
 ### Accounts, passwords and sessions
 
@@ -332,20 +410,43 @@ Related: takers never receive `price` at all (the server strips it in
 
 ### How item writes work — read this before touching them
 
-There are two kinds of item write, and they go to **different endpoints on
-purpose**. Mixing them up is how ticks get lost.
+Item writes go to **different endpoints on purpose**. Mixing them up is how
+ticks and quantities get lost.
 
-| Write | Endpoint | Sends |
-|---|---|---|
-| Tick / untick one item | `PATCH /api/orders/:id/items/status` | `{ name, status }` |
-| Add, remove, re-quantify, re-price | `PUT /api/orders/:id` | the full item list, **without `status`** |
+| Write | Who | Endpoint | Sends |
+|---|---|---|---|
+| Tick / untick one item | takers, maker, admin | `PATCH /api/orders/:id/items/status` | `{ name, status }` |
+| Change one item's quantity | takers | `PATCH /api/orders/:id/items/quantity` | `{ name, quantity }` |
+| Add one item | takers | `POST /api/orders/:id/items` | `{ name, quantity }` |
+| The edit window (add, remove, re-quantify, re-price) | maker, admin | `PUT /api/orders/:id` | the full item list **without `status`**, plus `baseItems`: the list as the window first showed it |
 
-**Why ticks have their own endpoint.** `PUT` replaces the order's whole item
+**Why takers write one item at a time.** `PUT` replaces the order's whole item
 list with whatever arrives. When two takers work the same order, each sends the
 list as they last saw it, so the second write undoes the first. Tested against
 MySQL: done the old way, two takers ticking different items at the same moment
 lost a tick in **20 out of 20** rounds. The `PATCH` endpoint updates a single
 row, so it cannot touch an item it was not asked about: **0 out of 20**.
+
+Until November 2026 a taker's quantity change and added item still went through
+`PUT` with the whole list — which is how an accountant could see an item still
+"unticked" or with its **old quantity**: a taker's list that was a few seconds
+old wrote the earlier values back over a colleague's newer ones (or over their
+own tick that was still on its way). Quantity and add now have their own
+single-item endpoints, takers can no longer change a completed order (409), and
+the client waits for queued ticks before changing a quantity, adding an item or
+finishing the order.
+
+**Why the edit window sends `baseItems`.** The maker's window can be open for
+minutes while takers work. On save the server compares three lists — what the
+window started from, what it sends, and what is in the database now — and applies
+**only what the maker changed**: a quantity the maker did not touch keeps the
+taker's newer value, an item a taker added meanwhile stays, and an item the maker
+re-quantified loses its tick (it has to be prepared again). See `mergeItemEdits`
+in `order_helpers.js`.
+
+**API answers are never cached** (`Cache-Control: no-store` on every `/api`
+answer, and `cache: 'no-store'` in the client). Safari in particular could
+otherwise show a list it had loaded earlier.
 
 **Why `PUT` omits `status`.** When the key is absent, the server keeps each
 item's current status, read *after* it locks the order row. So if a taker ticks
@@ -570,6 +671,7 @@ The web client uses the hyphenated key throughout.
 | Script | What |
 |---|---|
 | `Start AMA` / `Stop AMA` / `Restore AMA` / `Autostart AMA` | Daily use - see the top of this file (`scripts/launch.js`) |
+| `Demo AMA` | `scripts/launch.js demo`: a separate copy to try things on - database `<DB_NAME>_demo`, port 6060, Telegram off, backups and order log in `.ama_runtime/demo/`; sample accounts (admin / admin123; maker1, maker2, taker1, taker2, acc1, acc2 with demo1234; newbie waiting for approval) and orders in every state, including one waiting for any accountant and one where a taker brought in a helper. Asks whether to start fresh when demo data exists; stops when its window closes |
 | `Cloudflare AMA` | The online link: connect, start, stop, test, log, remove, update cloudflared (`scripts/tunnel.js`; step by step in CLOUDFLARE.md). `node scripts/tunnel.test.js` runs every option on a pretend Mac and Windows PC |
 | `scripts\start-dev.cmd` | Developers: API (real database, Telegram off) + client, each in its own window |
 | `scripts\stop-dev.cmd` | Stops both |
@@ -647,8 +749,14 @@ used once.
 | Order left open to anyone | every taker | Telegram: "🔓 open order" | the «طلبات مفتوحة» tab |
 | Open order taken | every taker who got it | that message is edited to "taken by …" | - |
 | Taker added to an order | that taker | Telegram: "new order" | in-app only |
-| Maker or admin edits what takers see | its takers | Telegram: "order updated" | in-app only |
-| Taker completes an order | its accountant | Telegram: "ready for ERP" | in-app only |
+| A taker brings in helpers | the added takers | Telegram: "🤝 X added you to order #N" | in-app only |
+| Maker or admin edits what takers see, while it is pending or in progress | its takers | Telegram: "order updated" | in-app only |
+| Maker sends a finished order back | its takers | Telegram: "🔁 sent back to you" (not also "updated") | in-app only |
+| Maker changes an order after it was entered into ERP (without sending it back) | the accountant who entered it | Telegram: "✏️ changed after ERP" (no prices; the changes are in the history) | in-app only |
+| ...and it already had an accountant | that accountant | Telegram: "🔁 sent back, returns to you when completed" | in-app only |
+| Order completed, no accountant yet | every accountant | Telegram: "🧾 ready for accounting" | the «جاهزة للمحاسبة» tab + in-app |
+| An accountant takes it (or it is sent back / deleted first) | every accountant who got it | that message is edited to "taken by …" / "sent back" / "no longer available" | the in-app offer is marked read |
+| Order completed, accountant already taken | that accountant | Telegram: "ready for ERP" | in-app only |
 
 "What takers see" means the customer, city, description, items or quantities.
 A save that changed nothing, or only prices, sends nothing.

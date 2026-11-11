@@ -70,6 +70,9 @@ async function request(method, path, { query, body, signal } = {}) {
       method,
       headers,
       signal,
+      // Never answer from the browser's cache: an order list must be the
+      // server's current one (the server also says no-store, for good measure).
+      cache: 'no-store',
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (cause) {

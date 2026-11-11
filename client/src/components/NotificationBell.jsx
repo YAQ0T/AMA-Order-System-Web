@@ -85,7 +85,7 @@ export default function NotificationBell() {
         onClick={() => setOpen((v) => !v)}
         title={T.notifications}
         aria-label={T.notifications}
-        className="btn-ghost relative p-2"
+        className="btn-ghost relative p-1.5 sm:p-2"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
           <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />

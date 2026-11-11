@@ -2,9 +2,9 @@ import { useState } from 'react';
 
 import { T, CITIES } from '../lib/labels';
 import { parseNumber, formatQuantity, orderDescription } from '../lib/format';
-import { useTakers, useAccounters } from '../hooks/useUsers';
+import { useTakers } from '../hooks/useUsers';
 import { useUpdateOrder } from '../hooks/useOrders';
-import { isOpenOrder } from '../api/orders';
+import { isOpenOrder, itemsPayload } from '../api/orders';
 import { useAuth } from '../store/auth';
 import { useToast } from './Toast';
 import { Modal, Spinner } from './ui';
@@ -25,10 +25,30 @@ const newRow = () => ({
   key: `new-${Math.random().toString(36).slice(2)}`,
   originalName: null,
   name: '',
-  quantity: '1',
+  quantity: '',
   price: '',
   status: null,
 });
+
+const FINISHED = ['completed', 'entered_erp'];
+
+/** What to say after a save - based on what the server did, not on what was sent. */
+function savedMessage(order, saved) {
+  // A finished order whose items changed went back to its takers.
+  if (FINISHED.includes(order.status) && ['pending', 'in-progress'].includes(saved?.status)) {
+    return T.sentBackToTakers;
+  }
+  // Changed after ERP: the server wrote its marker in the history (only when
+  // something really changed) and told the accountant who entered it.
+  const newestBefore = Math.max(0, ...(order.History || []).map((h) => h.id));
+  const markedNow = (saved?.History || []).some(
+    (h) => h.id > newestBefore && h.newDescription === 'Changed after it was entered into ERP'
+  );
+  if (order.status === 'entered_erp' && saved?.status === 'entered_erp' && saved?.Accounter && markedNow) {
+    return T.savedAccountantTold;
+  }
+  return T.saved;
+}
 
 /**
  * Call sites mount this with key={order.id} and unmount it when closed, so the
@@ -38,7 +58,6 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
   const toast = useToast();
   const updateOrder = useUpdateOrder();
   const { data: takers = [] } = useTakers(open && canAssign);
-  const { data: accounters = [] } = useAccounters(open && canAssign);
 
   const [title, setTitle] = useState(order?.title || '');
   // What the box starts with: the old English filler shows as empty.
@@ -52,9 +71,6 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
   const [isUrgent, setIsUrgent] = useState(Boolean(order?.isUrgent));
   // "Online" is the maker's mark (canAssign = maker or admin); "urgent" is the admin's.
   const isAdmin = useAuth((st) => st.user?.role === 'admin');
-  const [accounterId, setAccounterId] = useState(
-    order?.accounterId ? String(order.accounterId) : order?.Accounter?.id ? String(order.Accounter.id) : ''
-  );
   const [error, setError] = useState(null);
 
   if (!order) return null;
@@ -72,12 +88,21 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
     e.preventDefault();
     setError(null);
 
+    if (!city) {
+      setError(T.needCityToast);
+      return;
+    }
+
     const cleaned = [];
     const seen = new Set();
 
     for (const row of rows) {
       const name = row.name.trim();
       if (!name) continue;
+      if (String(row.quantity).trim() === '') {
+        setError(T.needQuantityToast(name));
+        return;
+      }
       const qty = parseNumber(row.quantity);
       if (qty === null || qty <= 0) {
         setError(`${T.invalidQuantity}: ${name}`);
@@ -123,6 +148,9 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
       ...(description.trim() !== initialDescription ? { description: description.trim() || null } : {}),
       city: city || null,
       items: cleaned,
+      // The items as this window first showed them. The server applies only
+      // what was changed here, and keeps what takers changed meanwhile.
+      baseItems: itemsPayload(order.Items),
     };
 
     if (canAssign) {
@@ -136,14 +164,13 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
         }
         payload.assignedTakerIds = takerIds;
       }
-      payload.accounterId = accounterId ? Number(accounterId) : null;
       payload.isOnline = isOnline;
       if (isAdmin) payload.isUrgent = isUrgent;
     }
 
     try {
-      await updateOrder.mutateAsync({ id: order.id, payload });
-      toast.success(T.saved);
+      const saved = await updateOrder.mutateAsync({ id: order.id, payload });
+      toast.success(savedMessage(order, saved));
       onClose();
     } catch (err) {
       setError(err?.message || T.somethingWentWrong);
@@ -153,6 +180,11 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
   return (
     <Modal open={open} onClose={onClose} title={`${T.editOrder} #${order.id}`} wide>
       <form onSubmit={submit} className="flex flex-col gap-4">
+        {FINISHED.includes(order.status) && (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900 dark:bg-amber-500/10 dark:text-amber-200">
+            {order.status === 'entered_erp' ? T.erpEditNote : T.reopenNote}
+          </p>
+        )}
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label className="label" htmlFor="edit-title">
@@ -273,7 +305,7 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
         </fieldset>
 
         {canAssign && (
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div>
             <div>
               <span className="label">{T.assignTakers}</span>
               {isActive && (
@@ -320,25 +352,6 @@ export default function OrderEditModal({ order, open, onClose, showPrices = true
                   })}
                 </div>
               )}
-            </div>
-
-            <div>
-              <label className="label" htmlFor="edit-accounter">
-                {T.accounter}
-              </label>
-              <select
-                id="edit-accounter"
-                className="input"
-                value={accounterId}
-                onChange={(e) => setAccounterId(e.target.value)}
-              >
-                <option value="">{T.none}</option>
-                {accounters.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.username}
-                  </option>
-                ))}
-              </select>
             </div>
           </div>
         )}
